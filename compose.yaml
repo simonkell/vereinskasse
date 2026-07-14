@@ -1,9 +1,10 @@
 services:
   vereinskasse:
-    build: .
+    image: ghcr.io/simonkell/vereinskasse:${IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     ports:
-      - "8080:8000"
+      - "${APP_PORT:-8080}:8000"
     environment:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY muss gesetzt sein}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD muss gesetzt sein}
@@ -12,6 +13,8 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - vereinskasse_data:/data
+    labels:
+      com.getarcaneapp.arcane.updater: "true"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s
@@ -21,3 +24,4 @@ services:
 
 volumes:
   vereinskasse_data:
+    name: vereinskasse_data

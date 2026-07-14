@@ -19,19 +19,79 @@ digitalen Belegen vervollständigt.
 Die Anwendung unterstützt den Arbeitsablauf, ersetzt aber keine steuerliche Beratung
 und erhebt derzeit keinen Anspruch auf eine zertifizierte GoBD-Verfahrensumgebung.
 
-## Start mit Docker Compose / Arcane
+## Veröffentlichung und Deployment
 
-1. Repository in Arcane als Compose-Projekt einbinden.
-2. `.env.example` als `.env` kopieren.
-3. `SECRET_KEY` mit einem langen Zufallswert und `ADMIN_PASSWORD` mit einem sicheren
-   Passwort setzen.
-   Wenn der Zugriff ausschließlich über HTTPS erfolgt, zusätzlich `COOKIE_SECURE=true`
-   setzen.
-4. Den Stack starten und Port `8080` aufrufen.
+Pushes auf `main` starten den Workflow `.github/workflows/container.yml`. Er führt
+zuerst die Tests aus und veröffentlicht anschließend Images für `linux/amd64` und
+`linux/arm64` nach:
+
+```text
+ghcr.io/simonkell/vereinskasse:latest
+ghcr.io/simonkell/vereinskasse:sha-<commit-sha>
+```
+
+`latest` ist für die automatische Aktualisierung in Arcane vorgesehen. Für einen
+Rollback kann in der Arcane-`.env` bei `IMAGE_TAG` jederzeit ein unveränderlicher
+SHA-Tag eingetragen werden.
+
+## Einrichtung in Arcane
+
+Das Image wird in GitHub Actions gebaut. Arcane baut es nicht erneut, sondern
+synchronisiert die Compose-Datei, zieht das geprüfte Image und betreibt den Stack.
+
+### 1. Zugriff auf das private GHCR-Image
+
+In GitHub einen klassischen Personal Access Token mit ausschließlich
+`read:packages` erstellen. Anschließend in Arcane unter
+`Customization → Container Registries` eintragen:
+
+- Registry: `ghcr.io`
+- Benutzername: `simonkell`
+- Passwort/Token: der `read:packages`-Token
+
+### 2. Privates Git-Repository verbinden
+
+Unter `Customization → Git Repositories` das Repository
+`https://github.com/simonkell/vereinskasse.git` eintragen. Für HTTPS eignet sich ein
+auf dieses eine Repository begrenzter Fine-grained Token mit `Contents: Read-only`.
+Alternativ kann ein read-only SSH Deploy Key verwendet werden.
+
+Danach unter `Projects → From Git Repo` anlegen:
+
+- Sync Name: `vereinskasse`
+- Branch: `main`
+- Compose File Path: `compose.yaml`
+- Auto Sync: aktiviert
+
+### 3. Umgebung konfigurieren
+
+Im `.env`-Editor des Projekts folgende Werte setzen:
+
+```dotenv
+SECRET_KEY=<langer-zufaelliger-wert>
+ADMIN_PASSWORD=<sicheres-passwort>
+APP_PORT=8080
+IMAGE_TAG=latest
+MAX_UPLOAD_MB=20
+COOKIE_SECURE=true
+```
+
+`COOKIE_SECURE=true` nur verwenden, wenn die Anwendung über HTTPS aufgerufen wird.
+Den Secret-Key kann man auf einem beliebigen Rechner mit `openssl rand -hex 32`
+erzeugen.
+
+Anschließend das Projekt deployen. Arcane kann neue `latest`-Digests über seine
+Image-Polling- und Auto-Update-Jobs erkennen und als Compose-Projekt aktualisieren.
+
+## Manueller Start mit Docker Compose
+
+Nach dem ersten erfolgreichen GitHub-Workflow kann derselbe Stack auch ohne Arcane
+gestartet werden:
 
 ```sh
 cp .env.example .env
-docker compose up -d --build
+docker login ghcr.io
+docker compose up -d
 ```
 
 Für einen zufälligen Secret-Key eignet sich beispielsweise:
