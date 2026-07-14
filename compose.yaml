@@ -4,7 +4,7 @@ services:
     pull_policy: always
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8080}:8000"
+      - "${APP_PORT:-8787}:8000"
     environment:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY muss gesetzt sein}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD muss gesetzt sein}

@@ -39,22 +39,19 @@ SHA-Tag eingetragen werden.
 Das Image wird in GitHub Actions gebaut. Arcane baut es nicht erneut, sondern
 synchronisiert die Compose-Datei, zieht das geprüfte Image und betreibt den Stack.
 
-### 1. Zugriff auf das private GHCR-Image
+### 1. Öffentliches Image
 
-In GitHub einen klassischen Personal Access Token mit ausschließlich
-`read:packages` erstellen. Anschließend in Arcane unter
-`Customization → Container Registries` eintragen:
+Das GHCR-Paket ist öffentlich. Arcane kann das Image deshalb ohne hinterlegte
+Registry-Zugangsdaten abrufen:
 
-- Registry: `ghcr.io`
-- Benutzername: `simonkell`
-- Passwort/Token: der `read:packages`-Token
+```text
+ghcr.io/simonkell/vereinskasse:latest
+```
 
-### 2. Privates Git-Repository verbinden
+### 2. Git-Repository verbinden
 
 Unter `Customization → Git Repositories` das Repository
-`https://github.com/simonkell/vereinskasse.git` eintragen. Für HTTPS eignet sich ein
-auf dieses eine Repository begrenzter Fine-grained Token mit `Contents: Read-only`.
-Alternativ kann ein read-only SSH Deploy Key verwendet werden.
+`https://github.com/simonkell/vereinskasse.git` ohne Authentifizierung eintragen.
 
 Danach unter `Projects → From Git Repo` anlegen:
 
@@ -70,7 +67,7 @@ Im `.env`-Editor des Projekts folgende Werte setzen:
 ```dotenv
 SECRET_KEY=<langer-zufaelliger-wert>
 ADMIN_PASSWORD=<sicheres-passwort>
-APP_PORT=8080
+APP_PORT=8787
 IMAGE_TAG=latest
 MAX_UPLOAD_MB=20
 COOKIE_SECURE=true
@@ -79,6 +76,10 @@ COOKIE_SECURE=true
 `COOKIE_SECURE=true` nur verwenden, wenn die Anwendung über HTTPS aufgerufen wird.
 Den Secret-Key kann man auf einem beliebigen Rechner mit `openssl rand -hex 32`
 erzeugen.
+
+`APP_PORT` ist ausschließlich der Port auf dem Docker-Host. Der interne
+Container-Port bleibt immer `8000`. Wenn `8787` ebenfalls belegt ist, kann ohne
+Image-Neubau jeder andere freie Host-Port eingetragen werden.
 
 Anschließend das Projekt deployen. Arcane kann neue `latest`-Digests über seine
 Image-Polling- und Auto-Update-Jobs erkennen und als Compose-Projekt aktualisieren.
@@ -90,7 +91,6 @@ gestartet werden:
 
 ```sh
 cp .env.example .env
-docker login ghcr.io
 docker compose up -d
 ```
 
@@ -101,7 +101,7 @@ openssl rand -hex 32
 ```
 
 Für Zugriff aus dem Internet sollte ein Reverse Proxy mit TLS vorgeschaltet werden.
-Port `8080` muss nicht öffentlich freigegeben werden, wenn der Proxy das interne
+Port `8787` muss nicht öffentlich freigegeben werden, wenn der Proxy das interne
 Docker-Netz verwendet.
 
 ## Persistenz und Backup
@@ -151,3 +151,7 @@ ergänzt werden nur Kategorie, Belegstatus und interne Notiz.
 
 Diese Punkte sollten anhand des echten Vereinsablaufs priorisiert werden, statt sie
 vorab in die erste Version einzubauen.
+
+## Lizenz
+
+Vereinskasse ist Open Source und wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
