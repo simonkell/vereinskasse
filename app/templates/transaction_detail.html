@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back" href="{{ url_for('transactions') }}">← Zurück zum Buchungsjournal</a>
+<div class="detail-head"><div><div class="eyebrow">Buchung vom {{ transaction.booking_date|date_de }}</div><h1>{{ transaction.counterparty or 'Unbekannte Gegenpartei' }}</h1><p>{{ transaction.purpose or 'Kein Verwendungszweck vorhanden' }}</p></div><strong class="hero-amount {{ 'positive' if transaction.amount_cents > 0 else 'negative' }}">{{ transaction.amount_cents|money(transaction.currency) }}</strong></div>
+<div class="grid detail-grid">
+  <section class="card">
+    <h2>Prüfung und Zuordnung</h2>
+    <form method="post" action="{{ url_for('transaction_update', transaction_id=transaction.id) }}" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Kategorie<select name="category_id"><option value="">Noch nicht zugeordnet</option>{% for category in categories %}<option value="{{ category.id }}" {{ 'selected' if transaction.category_id == category.id }}>{{ category.name }} · {{ category.tax_area }}</option>{% endfor %}</select></label>
+      <label>Belegstatus<select name="receipt_status"><option value="missing" {{ 'selected' if transaction.receipt_status == 'missing' }}>Beleg fehlt</option><option value="complete" {{ 'selected' if transaction.receipt_status == 'complete' }}>Vollständig</option><option value="not_required" {{ 'selected' if transaction.receipt_status == 'not_required' }}>Kein Beleg erforderlich</option></select></label>
+      <label>Notiz<textarea name="note" rows="4" placeholder="Interne Erläuterung zur Buchung">{{ transaction.note or '' }}</textarea></label>
+      <button class="button primary" type="submit">Speichern</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Digitale Belege</h2>
+    {% if attachments %}<div class="attachments">{% for file in attachments %}<a href="{{ url_for('attachment_download', attachment_id=file.id) }}" target="_blank"><span class="file-icon">PDF</span><div><strong>{{ file.original_name }}</strong><small>{{ (file.size_bytes / 1024)|round|int }} KB · {{ file.created_at }}</small></div></a>{% endfor %}</div>{% else %}<div class="empty compact">Zu dieser Buchung wurde noch kein Beleg hochgeladen.</div>{% endif %}
+    <form method="post" action="{{ url_for('attachment_upload', transaction_id=transaction.id) }}" enctype="multipart/form-data" class="upload-box">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Beleg auswählen<input type="file" name="attachment" accept="application/pdf,image/png,image/jpeg" required></label>
+      <button class="button" type="submit">Beleg hochladen</button>
+    </form>
+  </section>
+</div>
+<section class="card metadata"><h2>Bankdaten</h2><dl><div><dt>Wertstellung</dt><dd>{{ transaction.value_date|date_de }}</dd></div><div><dt>Gegenkonto</dt><dd>{{ transaction.counterparty_iban or '—' }}</dd></div><div><dt>Bankreferenz</dt><dd>{{ transaction.bank_reference or '—' }}</dd></div><div><dt>Vereinskonto</dt><dd>{{ transaction.account_iban or '—' }}</dd></div></dl></section>
+{% endblock %}
+

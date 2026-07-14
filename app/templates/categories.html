@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Kontierung</div><h1>Kategorien</h1></div></div>
+<div class="grid category-grid">
+  <section class="card"><h2>Neue Kategorie</h2><form method="post" class="stack"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="name" required placeholder="z. B. Trainingsmaterial"></label><label>Steuerbereich<select name="tax_area">{% for area in tax_areas %}<option>{{ area }}</option>{% endfor %}</select></label><button class="button primary" type="submit">Kategorie anlegen</button></form></section>
+  <section class="card"><h2>Vorhandene Kategorien</h2><div class="category-list">{% for category in categories %}<div><div><strong>{{ category.name }}</strong><small>{{ category.tax_area }}</small></div><span>{{ category.transaction_count }} Buchungen</span></div>{% endfor %}</div></section>
+</div>
+{% endblock %}
+

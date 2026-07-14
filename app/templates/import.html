@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Bankumsätze</div><h1>CAMT importieren</h1><p class="muted">Originaldateien bleiben unverändert erhalten; bereits importierte Umsätze werden erkannt.</p></div></div>
+<div class="grid two import-grid">
+  <section class="card">
+    <h2>Neue Datei</h2>
+    <form method="post" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="dropzone"><strong>CAMT.052 oder CAMT.053 auswählen</strong><span>XML-Datei aus dem Onlinebanking</span><input type="file" name="statement" accept=".xml,application/xml,text/xml" required></label>
+      <button class="button primary" type="submit">Datei prüfen und importieren</button>
+    </form>
+  </section>
+  <section class="card info-card"><h2>Was passiert beim Import?</h2><ol><li>Die XML-Struktur und Buchungen werden geprüft.</li><li>Die Originaldatei wird mit Prüfsumme archiviert.</li><li>Bereits bekannte Buchungen werden übersprungen.</li><li>Neue Buchungen landen in der Belegprüfung.</li></ol></section>
+</div>
+<section class="card"><div class="card-head"><h2>Importverlauf</h2></div>{% if batches %}<div class="batch-list">{% for batch in batches %}<div><div><strong>{{ batch.filename }}</strong><small>{{ batch.created_at }} · {{ batch.account_iban or 'Konto nicht angegeben' }}</small></div><span>{{ batch.imported_count }} neu · {{ batch.duplicate_count }} Duplikate</span><a href="{{ url_for('import_download', batch_id=batch.id) }}">Original</a></div>{% endfor %}</div>{% else %}<div class="empty">Noch keine Dateien importiert.</div>{% endif %}</section>
+{% endblock %}
+

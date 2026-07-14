@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23176b4d'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='38' font-family='Arial' font-weight='700' fill='white'%3EV%3C/text%3E%3C/svg%3E">
+  <title>{% block title %}Vereinskasse{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('dashboard') }}"><span>V</span> Vereinskasse</a>
+    {% if session.get('authenticated') %}
+    <nav>
+      <a href="{{ url_for('dashboard') }}">Übersicht</a>
+      <a href="{{ url_for('transactions') }}">Buchungen</a>
+      <a href="{{ url_for('import_file') }}">Import</a>
+      <a href="{{ url_for('categories') }}">Kategorien</a>
+      <a href="{{ url_for('audit') }}">Prüfprotokoll</a>
+    </nav>
+    <form action="{{ url_for('logout') }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="button ghost small" type="submit">Abmelden</button>
+    </form>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

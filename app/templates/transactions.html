@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Buchungsjournal</div><h1>Buchungen</h1></div><a class="button primary" href="{{ url_for('import_file') }}">Importieren</a></div>
+<form class="filterbar" method="get">
+  <select name="year"><option value="">Alle Jahre</option>{% for item in years %}<option value="{{ item.year }}" {{ 'selected' if item.year == year }}>{{ item.year }}</option>{% endfor %}</select>
+  <select name="status"><option value="">Alle Status</option><option value="missing" {{ 'selected' if status == 'missing' }}>Beleg fehlt</option><option value="uncategorized" {{ 'selected' if status == 'uncategorized' }}>Ohne Kategorie</option></select>
+  <button class="button" type="submit">Filtern</button>
+</form>
+<section class="card table-card">
+  {% if transactions %}<div class="table-wrap"><table><thead><tr><th>Datum</th><th>Gegenpartei / Zweck</th><th>Kategorie</th><th>Beleg</th><th class="right">Betrag</th></tr></thead><tbody>
+  {% for tx in transactions %}<tr class="clickable" onclick="location.href='{{ url_for('transaction_detail', transaction_id=tx.id) }}'"><td>{{ tx.booking_date|date_de }}</td><td><strong>{{ tx.counterparty or 'Unbekannt' }}</strong><small>{{ tx.purpose or 'Kein Verwendungszweck' }}</small></td><td>{{ tx.category_name or '—' }}</td><td><span class="badge {{ tx.receipt_status }}">{% if tx.receipt_status == 'complete' %}Vollständig{% elif tx.receipt_status == 'not_required' %}Nicht nötig{% else %}Fehlt{% endif %}</span></td><td class="right amount {{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty">Keine Buchungen für diesen Filter gefunden.</div>{% endif %}
+</section>
+{% endblock %}
+

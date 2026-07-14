@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div><div class="eyebrow">Geschäftsjahr {{ selected_year }}</div><h1>Finanzen auf einen Blick</h1></div>
+  <div class="actions">
+    <form method="get"><select name="year" onchange="this.form.submit()">{% for year in years %}<option {{ 'selected' if year == selected_year }}>{{ year }}</option>{% endfor %}</select></form>
+    <a class="button primary" href="{{ url_for('import_file') }}">CAMT importieren</a>
+  </div>
+</div>
+
+<section class="metrics">
+  <article class="metric"><span>Einnahmen</span><strong class="positive">{{ totals.income|money }}</strong></article>
+  <article class="metric"><span>Ausgaben</span><strong class="negative">{{ totals.expenses|money }}</strong></article>
+  <article class="metric"><span>Ergebnis</span><strong>{{ totals.balance|money }}</strong></article>
+  <article class="metric attention"><span>Offene Prüfung</span><strong>{{ totals.missing or 0 }} Belege</strong><small>{{ totals.uncategorized or 0 }} ohne Kategorie</small></article>
+</section>
+
+<div class="grid two">
+  <section class="card">
+    <div class="card-head"><div><h2>Nach Kategorie</h2><p class="muted">Saldo im Geschäftsjahr</p></div><a href="{{ url_for('export_csv', year=selected_year) }}">CSV exportieren</a></div>
+    {% if by_category %}<div class="category-list">{% for row in by_category %}
+      <div><div><strong>{{ row.name }}</strong><small>{{ row.tax_area }} · {{ row.count }} Buchungen</small></div><span class="{{ 'positive' if row.total >= 0 else 'negative' }}">{{ row.total|money }}</span></div>
+    {% endfor %}</div>{% else %}<div class="empty">Noch keine Buchungen für dieses Jahr.</div>{% endif %}
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h2>Zuletzt importiert</h2><p class="muted">Die neuesten Kontobewegungen</p></div><a href="{{ url_for('transactions') }}">Alle anzeigen</a></div>
+    {% if recent %}<div class="mini-list">{% for tx in recent %}
+      <a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span class="status-dot {{ tx.receipt_status }}"></span><div><strong>{{ tx.counterparty or 'Unbekannte Gegenpartei' }}</strong><small>{{ tx.booking_date|date_de }} · {{ tx.category_name or 'Ohne Kategorie' }}</small></div><b class="{{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</b></a>
+    {% endfor %}</div>{% else %}<div class="empty">Importiere deinen ersten CAMT-Kontoauszug.</div>{% endif %}
+  </section>
+</div>
+{% endblock %}
+

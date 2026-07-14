@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Nachvollziehbarkeit</div><h1>Prüfprotokoll</h1><p class="muted">Importe, Uploads und fachliche Änderungen werden chronologisch festgehalten.</p></div></div>
+<section class="card table-card">{% if entries %}<div class="table-wrap"><table><thead><tr><th>Zeitpunkt</th><th>Aktion</th><th>Objekt</th><th>Details</th></tr></thead><tbody>{% for entry in entries %}<tr><td>{{ entry.created_at }}</td><td>{{ entry.action }}</td><td>{{ entry.entity_type }} #{{ entry.entity_id or '—' }}</td><td>{{ entry.details or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">Noch keine protokollierten Aktionen.</div>{% endif %}</section>
+{% endblock %}
