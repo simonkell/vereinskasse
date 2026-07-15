@@ -29,9 +29,18 @@
 {% for account in accounts %}
   <article class="card account-card">
     <div class="account-card-head"><div><span class="badge {{ 'complete' if account.kind == 'bank' else 'not_required' }}">{{ 'Bankkonto' if account.kind == 'bank' else 'Barkasse' }}</span><h2>{{ account.name }}</h2><p class="muted">{{ account.iban or 'Manuell geführte Kasse' }} · {{ account.transaction_count }} Buchungen</p></div><strong>{{ account.balance_cents|money(account.currency) }}</strong></div>
+    {% if account.reconciliation %}<div class="reconciliation {{ 'balanced' if account.reconciliation.difference_cents == 0 else 'difference' }}"><div><span>{{ 'Banksaldo' if account.kind == 'bank' else 'Gezählter Bestand' }} vom {{ account.reconciliation.balance_date|date_de }}</span><strong>{{ account.reconciliation.balance_cents|money(account.currency) }}</strong></div><div><span>Berechnet zum Stichtag</span><strong>{{ account.reconciliation.calculated_balance_cents|money(account.currency) }}</strong></div><div><span>{{ 'Abgeglichen' if account.reconciliation.difference_cents == 0 else 'Abweichung' }}</span><strong>{{ account.reconciliation.difference_cents|money(account.currency) }}</strong></div></div>{% elif account.kind == 'bank' %}<div class="reconciliation empty-reconciliation"><span>Noch kein CAMT-Schlusssaldo vorhanden.</span></div>{% endif %}
     <div class="actions"><a class="button" href="{{ url_for('transactions', account_id=account.id) }}">Buchungen anzeigen</a>{% if account.kind == 'bank' %}<a class="button" href="{{ url_for('import_file') }}">Importieren</a>{% endif %}</div>
     <details class="cash-entry"><summary>Kontodaten bearbeiten</summary><form method="post" action="{{ url_for('account_update', account_id=account.id) }}" class="stack compact-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="form-row"><label>Name<input name="name" value="{{ account.name }}" required></label>{% if account.kind == 'bank' %}<label>IBAN<input name="iban" value="{{ account.iban or '' }}"></label>{% endif %}<label>Anfangsbestand<input name="opening_balance" value="{{ '%.2f'|format(account.opening_balance_cents / 100)|replace('.', ',') }}" required></label></div><button class="button" type="submit">Kontodaten speichern</button></form></details>
     {% if account.kind == 'cash' %}
+    <details class="cash-entry"><summary>Kassenbestand zählen</summary>
+      <form method="post" action="{{ url_for('cash_count', account_id=account.id) }}" class="stack compact-stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row two-columns"><label>Zähldatum<input type="date" name="balance_date" required></label><label>Gezählter Bestand<input name="balance" inputmode="decimal" placeholder="0,00" required></label></div>
+        <label>Notiz<input name="note" placeholder="z. B. Kassensturz zum Jahresende"></label>
+        <button class="button" type="submit">Zählbestand speichern</button>
+      </form>
+    </details>
     <details class="cash-entry"><summary>Barbuchung erfassen</summary>
       <form method="post" action="{{ url_for('cash_entry', account_id=account.id) }}" class="stack compact-stack">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

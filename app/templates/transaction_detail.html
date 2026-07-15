@@ -17,12 +17,19 @@
   </section>
   <section class="card">
     <h2>Digitale Belege</h2>
-    {% if attachments %}<div class="attachments">{% for file in attachments %}<a href="{{ url_for('attachment_download', attachment_id=file.id) }}" target="_blank"><span class="file-icon">PDF</span><div><strong>{{ file.original_name }}</strong><small>{{ (file.size_bytes / 1024)|round|int }} KB · {{ file.created_at }}</small></div></a>{% endfor %}</div>{% else %}<div class="empty compact">Zu dieser Buchung wurde noch kein Beleg hochgeladen.</div>{% endif %}
-    {% if not year_closed and not is_adjustment %}<form method="post" action="{{ url_for('attachment_upload', transaction_id=transaction.id) }}" enctype="multipart/form-data" class="upload-box">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Beleg auswählen<input type="file" name="attachment" accept="application/pdf,image/png,image/jpeg" required></label>
-      <button class="button" type="submit">Beleg hochladen</button>
-    </form>{% endif %}
+    {% if attachments %}<div class="attachments">{% for file in attachments %}<div class="attachment-row"><a href="{{ url_for('attachment_download', attachment_id=file.id) }}" target="_blank"><span class="file-icon">{{ 'IMG' if file.mime_type and file.mime_type.startswith('image/') else 'PDF' }}</span><div><strong>{{ file.original_name }}</strong><small>{{ (file.size_bytes / 1024)|round|int }} KB · {{ file.created_at }}</small></div></a>{% if not year_closed and not is_adjustment %}<details><summary>Ändern</summary><div class="attachment-actions"><form method="post" action="{{ url_for('attachment_replace', attachment_id=file.id) }}" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Ersatzdatei<input type="file" name="replacement" accept="application/pdf,image/*" required></label><button class="button small" type="submit">Ersetzen</button></form><form method="post" action="{{ url_for('attachment_delete', attachment_id=file.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button danger small" type="submit">Löschen</button></form></div></details>{% endif %}</div>{% endfor %}</div>{% else %}<div class="empty compact">Zu dieser Buchung wurde noch kein Beleg hochgeladen.</div>{% endif %}
+    {% if not year_closed and not is_adjustment %}<div class="receipt-upload-actions">
+      <form method="post" action="{{ url_for('attachment_upload', transaction_id=transaction.id) }}" enctype="multipart/form-data" class="camera-upload">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="button primary camera-button">📷 Beleg fotografieren<input class="visually-hidden" type="file" name="camera" accept="image/*" capture="environment" required onchange="this.form.submit()"></label>
+        <small>Öffnet auf dem Smartphone die Kamera und lädt das Foto direkt hoch.</small>
+      </form>
+      <form method="post" action="{{ url_for('attachment_upload', transaction_id=transaction.id) }}" enctype="multipart/form-data" class="upload-box">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Datei auswählen<input type="file" name="attachment" accept="application/pdf,image/*" required></label>
+        <button class="button" type="submit">Beleg hochladen</button>
+      </form>
+    </div>{% endif %}
   </section>
 </div>
 <section class="card metadata">

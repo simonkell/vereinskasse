@@ -32,6 +32,8 @@ CAMT_NESTED_PARTIES = """<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
   <BkToCstmrAcctRpt><Rpt><Id>SPARDA-REPORT</Id>
     <Acct><Id><IBAN>DE02120300000000202051</IBAN></Id></Acct>
+    <Bal><Tp><CdOrPrtry><Cd>OPBD</Cd></CdOrPrtry></Tp><Amt Ccy="EUR">100.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-06-01</Dt></Dt></Bal>
+    <Bal><Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp><Amt Ccy="EUR">105.05</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-06-02</Dt></Dt></Bal>
     <Ntry><Amt Ccy="EUR">25.00</Amt><CdtDbtInd>CRDT</CdtDbtInd>
       <BookgDt><Dt>2026-06-01</Dt></BookgDt><ValDt><Dt>2026-06-01</Dt></ValDt>
       <AcctSvcrRef>SPARDA-001</AcctSvcrRef>
@@ -95,6 +97,11 @@ class CamtParserTest(unittest.TestCase):
         self.assertEqual(report.transactions[0].counterparty_iban, "DE11111111111111111111")
         self.assertEqual(report.transactions[1].counterparty, "Lieferant Beispiel")
         self.assertEqual(report.transactions[1].counterparty_iban, "DE22222222222222222222")
+        self.assertEqual(len(report.balances), 2)
+        self.assertEqual(report.balances[0].balance_type, "OPBD")
+        self.assertEqual(report.balances[0].amount_cents, 10000)
+        self.assertEqual(report.balances[1].balance_type, "CLBD")
+        self.assertEqual(report.balances[1].amount_cents, 10505)
 
     def test_rejects_non_camt_xml(self):
         with tempfile.TemporaryDirectory() as directory:

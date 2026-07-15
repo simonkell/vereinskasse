@@ -143,6 +143,68 @@ class AppTest(unittest.TestCase):
         self.assertEqual(transaction_count, 2)
         self.assertEqual(second_batch, (0, 2))
 
+    def test_camt_balances_set_opening_balance_and_reconcile(self):
+        self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (io.BytesIO(CAMT_NESTED_PARTIES.encode()), "sparda.xml"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        account = connection.execute(
+            "SELECT id,opening_balance_cents FROM accounts"
+        ).fetchone()
+        balances = connection.execute(
+            """SELECT balance_type,balance_date,balance_cents
+               FROM account_reconciliations ORDER BY balance_type"""
+        ).fetchall()
+        connection.close()
+        self.assertEqual(account[1], 10000)
+        self.assertEqual(
+            balances,
+            [("CLBD", "2026-06-02", 10505), ("OPBD", "2026-06-01", 10000)],
+        )
+        page = self.client.get("/accounts")
+        self.assertIn("Abgeglichen".encode(), page.data)
+        self.assertIn("105,05 EUR".encode(), page.data)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        category_id = connection.execute("SELECT id FROM categories LIMIT 1").fetchone()[0]
+        connection.execute(
+            "UPDATE transactions SET category_id=?,receipt_status='not_required'", (category_id,)
+        )
+        connection.commit()
+        connection.close()
+        self.client.post("/year-close/2026", data={"csrf_token": self.csrf()})
+        archive_response = self.client.get("/years/2026/archive.zip")
+        with zipfile.ZipFile(io.BytesIO(archive_response.data)) as archive:
+            self.assertIn("kontenabgleich.csv", archive.namelist())
+            self.assertIn("Abweichung".encode(), archive.read("kontenabgleich.csv"))
+
+    def test_manual_opening_balance_is_not_overwritten_by_camt(self):
+        self.client.post(
+            "/accounts",
+            data={
+                "csrf_token": self.csrf(), "kind": "bank", "name": "Vereinskonto",
+                "iban": "DE02120300000000202051", "opening_balance": "50,00",
+            },
+        )
+        self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (io.BytesIO(CAMT_NESTED_PARTIES.encode()), "sparda.xml"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        opening, source = connection.execute(
+            "SELECT opening_balance_cents,opening_balance_source FROM accounts"
+        ).fetchone()
+        connection.close()
+        self.assertEqual((opening, source), (5000, "manual"))
+
     def test_csv_preview_and_mapping_import(self):
         self.client.post(
             "/accounts",
@@ -220,6 +282,158 @@ class AppTest(unittest.TestCase):
         connection.close()
         self.assertEqual(transaction, (account_id, -350, "CASH"))
         self.assertEqual(balance, 650)
+
+    def test_cash_count_is_compared_with_calculated_balance(self):
+        self.client.post(
+            "/accounts",
+            data={
+                "csrf_token": self.csrf(), "kind": "cash", "name": "Barkasse",
+                "opening_balance": "10,00",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        account_id = connection.execute("SELECT id FROM accounts").fetchone()[0]
+        connection.close()
+        self.client.post(
+            f"/accounts/{account_id}/cash-entry",
+            data={
+                "csrf_token": self.csrf(), "booking_date": "2026-12-31",
+                "direction": "expense", "amount": "3,50", "purpose": "Porto",
+                "receipt_status": "not_required",
+            },
+        )
+        self.client.post(
+            f"/accounts/{account_id}/cash-count",
+            data={
+                "csrf_token": self.csrf(), "balance_date": "2026-12-31",
+                "balance": "6,50", "note": "Jahresendzählung",
+            },
+        )
+        page = self.client.get("/accounts")
+        self.assertIn("Gezählter Bestand".encode(), page.data)
+        self.assertIn("Abgeglichen".encode(), page.data)
+
+    def test_rules_preview_and_controlled_application(self):
+        self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (io.BytesIO(CAMT_NESTED_PARTIES.encode()), "sparda.xml"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        category_id = connection.execute(
+            "SELECT id FROM categories WHERE name='Mitgliedsbeiträge'"
+        ).fetchone()[0]
+        connection.close()
+        self.client.post(
+            "/rules",
+            data={
+                "csrf_token": self.csrf(), "name": "Beiträge",
+                "direction": "income", "purpose_contains": "Mitgliedsbeitrag",
+                "category_id": str(category_id), "receipt_status": "not_required",
+            },
+        )
+        rules_page = self.client.get("/rules")
+        self.assertIn("1 Treffer".encode(), rules_page.data)
+        journal = self.client.get("/transactions")
+        self.assertIn("Vorschlag: Beiträge".encode(), journal.data)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rule_id = connection.execute("SELECT id FROM classification_rules").fetchone()[0]
+        connection.close()
+        self.client.post(
+            f"/rules/{rule_id}/apply", data={"csrf_token": self.csrf()}
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rows = connection.execute(
+            "SELECT amount_cents,category_id,receipt_status FROM transactions ORDER BY id"
+        ).fetchall()
+        connection.close()
+        self.assertEqual(rows[0], (2500, category_id, "not_required"))
+        self.assertIsNone(rows[1][1])
+
+    def test_bulk_update_changes_selected_transactions(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "camt.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        ids = [row[0] for row in connection.execute("SELECT id FROM transactions ORDER BY id")]
+        category_id = connection.execute("SELECT id FROM categories LIMIT 1").fetchone()[0]
+        connection.close()
+        self.client.post(
+            "/transactions/bulk-update",
+            data={
+                "csrf_token": self.csrf(), "transaction_id": [str(value) for value in ids],
+                "category_id": str(category_id), "receipt_status": "not_required",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rows = connection.execute(
+            "SELECT category_id,receipt_status FROM transactions"
+        ).fetchall()
+        connection.close()
+        self.assertEqual(rows, [(category_id, "not_required"), (category_id, "not_required")])
+
+    def test_camera_upload_replace_and_delete_receipt(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "camt.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        transaction_id = connection.execute("SELECT id FROM transactions LIMIT 1").fetchone()[0]
+        connection.close()
+        detail = self.client.get(f"/transactions/{transaction_id}")
+        self.assertIn(b'capture="environment"', detail.data)
+        self.client.post(
+            f"/transactions/{transaction_id}/attachments",
+            data={
+                "csrf_token": self.csrf(),
+                "camera": (io.BytesIO(b"camera-photo"), "image", "image/jpeg"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        attachment = connection.execute(
+            "SELECT id,stored_path,original_name FROM attachments"
+        ).fetchone()
+        status = connection.execute(
+            "SELECT receipt_status FROM transactions WHERE id=?", (transaction_id,)
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(status, "complete")
+        self.assertEqual(attachment[2], "image.jpg")
+        old_path = Path(self.app.config["DATA_DIR"]) / attachment[1]
+        self.assertTrue(old_path.exists())
+        self.client.post(
+            f"/attachments/{attachment[0]}/replace",
+            data={
+                "csrf_token": self.csrf(),
+                "replacement": (io.BytesIO(b"replacement-pdf"), "rechnung.pdf"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        replaced = connection.execute(
+            "SELECT original_name,stored_path FROM attachments WHERE id=?", (attachment[0],)
+        ).fetchone()
+        connection.close()
+        self.assertEqual(replaced[0], "rechnung.pdf")
+        self.assertFalse(old_path.exists())
+        self.client.post(
+            f"/attachments/{attachment[0]}/delete", data={"csrf_token": self.csrf()}
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        count = connection.execute("SELECT COUNT(*) FROM attachments").fetchone()[0]
+        status = connection.execute(
+            "SELECT receipt_status FROM transactions WHERE id=?", (transaction_id,)
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(status, "missing")
 
     def test_cash_reversal_creates_immutable_counter_booking(self):
         self.client.post(
@@ -326,6 +540,13 @@ class AppTest(unittest.TestCase):
         detail = self.client.get(f"/transactions/{adjustment[1]}")
         self.assertIn("unveränderlichen Korrekturkette".encode(), detail.data)
 
+        self.client.post(
+            f"/accounts/{account_id}/cash-count",
+            data={
+                "csrf_token": self.csrf(), "balance_date": "2026-12-31",
+                "balance": "12,50", "note": "Jahresendzählung",
+            },
+        )
         self.client.post("/year-close/2026", data={"csrf_token": self.csrf()})
         archive_response = self.client.get("/years/2026/archive.zip")
         self.assertEqual(archive_response.status_code, 200)
@@ -461,7 +682,7 @@ class AppTest(unittest.TestCase):
         self.assertIn("/login", anonymous.get("/").headers["Location"])
 
     def test_authenticated_product_pages_render(self):
-        for path in ("/", "/transactions", "/accounts", "/import", "/categories", "/reviews", "/year-close", "/audit"):
+        for path in ("/", "/transactions", "/accounts", "/import", "/categories", "/rules", "/reviews", "/year-close", "/audit"):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
 

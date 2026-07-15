@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -24,9 +24,18 @@ class CamtTransaction:
 
 
 @dataclass(frozen=True)
+class StatementBalance:
+    balance_type: str
+    balance_date: str
+    amount_cents: int
+    currency: str
+
+
+@dataclass(frozen=True)
 class CamtReport:
     account_iban: str
     transactions: list[CamtTransaction]
+    balances: list[StatementBalance] = field(default_factory=list)
 
 
 def _local(tag: str) -> str:
@@ -94,11 +103,32 @@ def parse_camt(path: str | Path) -> CamtReport:
         raise ValueError("Keine CAMT-Kontoauszugsdaten (Rpt/Stmt) gefunden.")
 
     parsed = []
+    balances = []
     report_ibans = []
     for report in reports:
         account = next((c for c in list(report) if _local(c.tag) == "Acct"), None)
         iban = _desc_text(account, "IBAN") if account is not None else ""
         report_ibans.append(iban)
+
+        for balance in [c for c in list(report) if _local(c.tag) == "Bal"]:
+            amount_node = next((c for c in list(balance) if _local(c.tag) == "Amt"), None)
+            balance_type = (
+                _first_text(balance, "Tp", "CdOrPrtry", "Cd")
+                or _first_text(balance, "Tp", "CdOrPrtry", "Prtry")
+            )
+            balance_date = _iso_date(balance, "Dt")
+            if amount_node is None or not amount_node.text or not balance_type or not balance_date:
+                continue
+            balances.append(
+                StatementBalance(
+                    balance_type=balance_type,
+                    balance_date=balance_date,
+                    amount_cents=_amount_cents(
+                        amount_node.text.strip(), _first_text(balance, "CdtDbtInd")
+                    ),
+                    currency=amount_node.attrib.get("Ccy", "EUR"),
+                )
+            )
 
         for entry in [c for c in list(report) if _local(c.tag) == "Ntry"]:
             entry_amount_node = next((c for c in list(entry) if _local(c.tag) == "Amt"), None)
@@ -167,4 +197,4 @@ def parse_camt(path: str | Path) -> CamtReport:
         raise ValueError("Die CAMT-Datei enthält keine Buchungen.")
     unique_ibans = {iban for iban in report_ibans if iban}
     account_iban = next(iter(unique_ibans)) if len(unique_ibans) == 1 else ""
-    return CamtReport(account_iban=account_iban, transactions=parsed)
+    return CamtReport(account_iban=account_iban, transactions=parsed, balances=balances)

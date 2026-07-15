@@ -14,14 +14,18 @@ kategorisiert und mit digitalen Belegen vervollständigt.
 - unveränderte Archivierung der importierten Originaldatei inklusive SHA-256-Prüfsumme
 - Buchungsjournal mit Jahres- und Prüfstatusfilter
 - Kategorien und Zuordnung zu den vier steuerlichen Bereichen eines gemeinnützigen Vereins
-- mehrere PDF-, PNG- oder JPEG-Belege je Buchung
+- kontrollierte Zuordnungsregeln mit Treffervorschau sowie Stapelbearbeitung
+- CAMT-Eröffnungs- und Schlusssalden mit sichtbarem Kontenabgleich
+- Zählbestände und Abweichungsprüfung für die Barkasse
+- mehrere PDF- oder gängige Bildbelege je Buchung
+- Belege direkt mit der Smartphone-Kamera aufnehmen, ersetzen oder löschen
 - Status `Beleg fehlt`, `Vollständig` oder `Kein Beleg erforderlich`
 - Jahresübersicht und CSV-Export
 - Splitbuchungen mit vollständiger Betragskontrolle
 - unveränderliche Storno- und Korrekturketten für manuelle Barkassenbuchungen
 - Jahresabschluss mit Vollständigkeitsprüfung und Änderungssperre
 - eigenständig archivierbares ZIP je abgeschlossenem Jahr mit Buchungen, Belegen,
-  Originalimporten, Prüfbericht und SHA-256-Manifest
+  Originalimporten, Kontenabgleich, Prüfbericht und SHA-256-Manifest
 - Prüfprotokoll für Importe, Beleguploads und fachliche Änderungen
 - zeitlich begrenzte, widerrufbare Nur-Lese-Freigaben für Kassenprüfer
 - unveränderliche Prüfungsstände, die spätere Änderungen nicht rückwirkend verändern

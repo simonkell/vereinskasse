@@ -39,7 +39,15 @@ from .db import close_db, get_db, init_db, log_action
 from .mt940 import parse_mt940
 
 
-ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
+ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "webp", "heic", "heif"}
+MIME_EXTENSIONS = {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/heic": "heic",
+    "image/heif": "heif",
+}
 TAX_AREAS = (
     "Ideeller Bereich",
     "Vermögensverwaltung",
@@ -60,6 +68,16 @@ def parse_amount_cents(value):
     except InvalidOperation as exc:
         raise ValueError("Betrag ist ungültig") from exc
     return int(amount * 100)
+
+
+def upload_extension(upload):
+    extension = upload.filename.rsplit(".", 1)[-1].lower() if "." in upload.filename else ""
+    return extension or MIME_EXTENSIONS.get((upload.mimetype or "").lower(), "")
+
+
+def safe_upload_name(upload, extension):
+    name = secure_filename(upload.filename) or "beleg"
+    return name if "." in name else f"{name}.{extension}"
 
 
 def refresh_camt_counterparties():
@@ -130,6 +148,108 @@ def refresh_camt_counterparties():
     return repaired
 
 
+def store_report_balances(db, account_id, import_batch_id, report):
+    stored = 0
+    for balance in report.balances:
+        if balance.balance_type not in {"OPBD", "CLBD", "ITBD"}:
+            continue
+        existing = db.execute(
+            """SELECT balance_cents,currency FROM account_reconciliations
+               WHERE account_id=? AND kind='bank_statement' AND balance_type=?
+                 AND balance_date=?""",
+            (account_id, balance.balance_type, balance.balance_date),
+        ).fetchone()
+        db.execute(
+            """INSERT INTO account_reconciliations(
+                   account_id,import_batch_id,kind,balance_type,balance_date,
+                   balance_cents,currency
+               ) VALUES (?,?,'bank_statement',?,?,?,?)
+               ON CONFLICT(account_id,kind,balance_type,balance_date) DO UPDATE SET
+                   import_batch_id=excluded.import_batch_id,
+                   balance_cents=excluded.balance_cents,
+                   currency=excluded.currency""",
+            (
+                account_id,
+                import_batch_id,
+                balance.balance_type,
+                balance.balance_date,
+                balance.amount_cents,
+                balance.currency,
+            ),
+        )
+        if (
+            existing is None
+            or existing["balance_cents"] != balance.amount_cents
+            or existing["currency"] != balance.currency
+        ):
+            stored += 1
+    opening = db.execute(
+        """SELECT balance_cents FROM account_reconciliations
+           WHERE account_id=? AND kind='bank_statement' AND balance_type='OPBD'
+           ORDER BY balance_date,id LIMIT 1""",
+        (account_id,),
+    ).fetchone()
+    if opening is not None:
+        db.execute(
+            """UPDATE accounts SET opening_balance_cents=?,opening_balance_source='camt'
+               WHERE id=? AND opening_balance_source IN ('camt','legacy')""",
+            (opening["balance_cents"], account_id),
+        )
+    return stored
+
+
+def refresh_camt_balances():
+    """Backfill statement balances from retained CAMT originals."""
+    db = get_db()
+    batches = db.execute(
+        """SELECT id,account_id,stored_path FROM import_batches
+           WHERE account_id IS NOT NULL AND lower(stored_path) LIKE '%.xml'"""
+    ).fetchall()
+    stored = 0
+    for batch in batches:
+        path = Path(current_app.config["DATA_DIR"]) / batch["stored_path"]
+        if not path.is_file():
+            continue
+        try:
+            report = parse_camt(path)
+        except (OSError, ValueError):
+            continue
+        stored += store_report_balances(db, batch["account_id"], batch["id"], report)
+    if stored:
+        log_action(
+            db,
+            "metadata_repaired",
+            "account_reconciliations",
+            None,
+            json.dumps({"balances": stored}),
+        )
+    db.commit()
+    return stored
+
+
+def rule_matches(rule, transaction):
+    if rule["account_id"] and rule["account_id"] != transaction["account_id"]:
+        return False
+    if rule["direction"] == "income" and transaction["amount_cents"] <= 0:
+        return False
+    if rule["direction"] == "expense" and transaction["amount_cents"] >= 0:
+        return False
+    conditions = (
+        ("counterparty_contains", "counterparty", False),
+        ("purpose_contains", "purpose", False),
+        ("counterparty_iban", "counterparty_iban", True),
+    )
+    for rule_field, transaction_field, exact in conditions:
+        expected = (rule[rule_field] or "").strip().casefold()
+        if not expected:
+            continue
+        actual = (transaction[transaction_field] or "").strip().casefold()
+        matches = actual == expected if exact else expected in actual
+        if not matches:
+            return False
+    return True
+
+
 def create_app(test_config=None):
     app = Flask(__name__)
     data_dir = Path(os.environ.get("DATA_DIR", "data")).resolve()
@@ -152,6 +272,7 @@ def create_app(test_config=None):
     with app.app_context():
         init_db()
         refresh_camt_counterparties()
+        refresh_camt_balances()
 
     @app.template_filter("money")
     def money(cents, currency="EUR"):
@@ -367,6 +488,29 @@ def create_app(test_config=None):
             "SELECT * FROM accounts WHERE organization_id=? AND active=1 ORDER BY kind,name",
             (ORGANIZATION_ID,),
         ).fetchall()
+        categories = db.execute("SELECT * FROM categories WHERE active=1 ORDER BY name").fetchall()
+        rules = db.execute(
+            "SELECT * FROM classification_rules WHERE active=1 ORDER BY id"
+        ).fetchall()
+        closed_years = {
+            row["year"]
+            for row in db.execute(
+                "SELECT year FROM year_closures WHERE organization_id=?", (ORGANIZATION_ID,)
+            )
+        }
+        suggestions = {}
+        for row in rows:
+            if (
+                row["category_id"] is not None
+                or row["split_count"]
+                or row["adjustment_kind"]
+                or row["adjustment_role"]
+                or row["booking_date"][:4] in closed_years
+            ):
+                continue
+            suggestion = next((rule for rule in rules if rule_matches(rule, row)), None)
+            if suggestion is not None:
+                suggestions[row["id"]] = suggestion
         return render_template(
             "transactions.html",
             transactions=rows,
@@ -375,6 +519,8 @@ def create_app(test_config=None):
             status=status,
             accounts=accounts,
             account_id=account_id,
+            categories=categories,
+            suggestions=suggestions,
         )
 
     @app.get("/transactions/<int:transaction_id>")
@@ -459,16 +605,93 @@ def create_app(test_config=None):
         flash("Buchung gespeichert.", "success")
         return redirect(url_for("transaction_detail", transaction_id=transaction_id))
 
+    @app.post("/transactions/bulk-update")
+    @login_required
+    def transactions_bulk_update():
+        db = get_db()
+        try:
+            transaction_ids = sorted(
+                {int(value) for value in request.form.getlist("transaction_id")}
+            )
+        except ValueError:
+            abort(400)
+        if not transaction_ids or len(transaction_ids) > 1000:
+            flash("Bitte mindestens eine Buchung auswählen.", "error")
+            return redirect(url_for("transactions"))
+        category_value = request.form.get("category_id", "keep")
+        receipt_status = request.form.get("receipt_status", "keep")
+        if category_value == "keep" and receipt_status == "keep":
+            flash("Bitte eine Kategorie oder einen Belegstatus auswählen.", "error")
+            return redirect(url_for("transactions"))
+        category_id = None
+        if category_value not in {"keep", "clear"}:
+            try:
+                category_id = int(category_value)
+            except ValueError:
+                abort(400)
+            if db.execute(
+                "SELECT 1 FROM categories WHERE id=? AND active=1", (category_id,)
+            ).fetchone() is None:
+                abort(400)
+        if receipt_status not in {"keep", "missing", "complete", "not_required"}:
+            abort(400)
+        placeholders = ",".join("?" for _ in transaction_ids)
+        rows = db.execute(
+            f"SELECT * FROM transactions WHERE id IN ({placeholders})", transaction_ids
+        ).fetchall()
+        updated = 0
+        skipped = 0
+        for row in rows:
+            if year_is_closed(db, row["booking_date"][:4]) or transaction_is_adjustment(
+                db, row["id"]
+            ):
+                skipped += 1
+                continue
+            if category_value != "keep" and db.execute(
+                "SELECT 1 FROM transaction_splits WHERE transaction_id=?", (row["id"],)
+            ).fetchone():
+                skipped += 1
+                continue
+            assignments = ["updated_at=CURRENT_TIMESTAMP"]
+            values = []
+            if category_value != "keep":
+                assignments.append("category_id=?")
+                values.append(category_id if category_value != "clear" else None)
+            if receipt_status != "keep":
+                assignments.append("receipt_status=?")
+                values.append(receipt_status)
+            values.append(row["id"])
+            db.execute(
+                f"UPDATE transactions SET {','.join(assignments)} WHERE id=?", values
+            )
+            log_action(
+                db,
+                "bulk_updated",
+                "transaction",
+                row["id"],
+                json.dumps(
+                    {"category_id": category_value, "receipt_status": receipt_status}
+                ),
+            )
+            updated += 1
+        db.commit()
+        message = f"{updated} Buchungen gemeinsam aktualisiert."
+        if skipped:
+            message += f" {skipped} gesperrte oder aufgeteilte Buchungen übersprungen."
+        flash(message, "success")
+        target = request.form.get("return_to", "")
+        return redirect(target if target.startswith("/transactions") else url_for("transactions"))
+
     @app.post("/transactions/<int:transaction_id>/attachments")
     @login_required
     def attachment_upload(transaction_id):
-        upload = request.files.get("attachment")
+        upload = request.files.get("attachment") or request.files.get("camera")
         if not upload or not upload.filename:
             flash("Bitte eine Datei auswählen.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
-        extension = upload.filename.rsplit(".", 1)[-1].lower() if "." in upload.filename else ""
+        extension = upload_extension(upload)
         if extension not in ALLOWED_EXTENSIONS:
-            flash("Erlaubt sind PDF-, PNG- und JPEG-Dateien.", "error")
+            flash("Erlaubt sind PDF- und gängige Bilddateien.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
 
         db = get_db()
@@ -489,7 +712,7 @@ def create_app(test_config=None):
                VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 transaction_id,
-                secure_filename(upload.filename) or f"beleg.{extension}",
+                safe_upload_name(upload, extension),
                 str(target.relative_to(app.config["DATA_DIR"])),
                 upload.mimetype,
                 digest,
@@ -750,6 +973,98 @@ def create_app(test_config=None):
         path = Path(app.config["DATA_DIR"]) / row["stored_path"]
         return send_file(path, download_name=row["original_name"], as_attachment=False)
 
+    @app.post("/attachments/<int:attachment_id>/replace")
+    @login_required
+    def attachment_replace(attachment_id):
+        db = get_db()
+        attachment = db.execute(
+            """SELECT a.*,t.booking_date FROM attachments a
+               JOIN transactions t ON t.id=a.transaction_id WHERE a.id=?""",
+            (attachment_id,),
+        ).fetchone()
+        if attachment is None:
+            abort(404)
+        transaction_id = attachment["transaction_id"]
+        upload = request.files.get("replacement")
+        if not upload or not upload.filename:
+            flash("Bitte eine Ersatzdatei auswählen.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        extension = upload_extension(upload)
+        if extension not in ALLOWED_EXTENSIONS:
+            flash("Erlaubt sind PDF- und gängige Bilddateien.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if transaction_is_adjustment(db, transaction_id) or year_is_closed(
+            db, attachment["booking_date"][:4]
+        ):
+            flash("Der Beleg ist durch Abschluss oder Korrekturkette gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        storage_name = f"{uuid.uuid4().hex}.{extension}"
+        target = Path(app.config["DATA_DIR"]) / "attachments" / storage_name
+        upload.save(target)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        old_path = Path(app.config["DATA_DIR"]) / attachment["stored_path"]
+        db.execute(
+            """UPDATE attachments SET original_name=?,stored_path=?,mime_type=?,
+                   file_hash=?,size_bytes=?,created_at=CURRENT_TIMESTAMP WHERE id=?""",
+            (
+                safe_upload_name(upload, extension),
+                str(target.relative_to(app.config["DATA_DIR"])),
+                upload.mimetype,
+                digest,
+                target.stat().st_size,
+                attachment_id,
+            ),
+        )
+        log_action(
+            db,
+            "replaced",
+            "attachment",
+            attachment_id,
+            json.dumps(
+                {"old": attachment["original_name"], "new": upload.filename},
+                ensure_ascii=False,
+            ),
+        )
+        db.commit()
+        old_path.unlink(missing_ok=True)
+        flash("Beleg ersetzt.", "success")
+        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+    @app.post("/attachments/<int:attachment_id>/delete")
+    @login_required
+    def attachment_delete(attachment_id):
+        db = get_db()
+        attachment = db.execute(
+            """SELECT a.*,t.booking_date FROM attachments a
+               JOIN transactions t ON t.id=a.transaction_id WHERE a.id=?""",
+            (attachment_id,),
+        ).fetchone()
+        if attachment is None:
+            abort(404)
+        transaction_id = attachment["transaction_id"]
+        if transaction_is_adjustment(db, transaction_id) or year_is_closed(
+            db, attachment["booking_date"][:4]
+        ):
+            flash("Der Beleg ist durch Abschluss oder Korrekturkette gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        db.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
+        remaining = db.execute(
+            "SELECT COUNT(*) FROM attachments WHERE transaction_id=?", (transaction_id,)
+        ).fetchone()[0]
+        if not remaining:
+            db.execute(
+                """UPDATE transactions SET receipt_status='missing',updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND receipt_status='complete'""",
+                (transaction_id,),
+            )
+        log_action(
+            db, "deleted", "attachment", attachment_id, attachment["original_name"]
+        )
+        db.commit()
+        (Path(app.config["DATA_DIR"]) / attachment["stored_path"]).unlink(missing_ok=True)
+        flash("Beleg gelöscht.", "success")
+        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
     @app.route("/accounts", methods=["GET", "POST"])
     @login_required
     def accounts():
@@ -801,7 +1116,7 @@ def create_app(test_config=None):
             flash("Konto angelegt.", "success")
             return redirect(url_for("accounts"))
 
-        rows = db.execute(
+        account_rows = db.execute(
             """SELECT a.*, a.opening_balance_cents + COALESCE(SUM(t.amount_cents),0) balance_cents,
                       COUNT(t.id) transaction_count
                FROM accounts a LEFT JOIN transactions t ON t.account_id=a.id
@@ -809,8 +1124,95 @@ def create_app(test_config=None):
                GROUP BY a.id ORDER BY a.kind,a.name""",
             (ORGANIZATION_ID,),
         ).fetchall()
+        rows = []
+        for account_row in account_rows:
+            account = dict(account_row)
+            if account["kind"] == "bank":
+                reconciliation = db.execute(
+                    """SELECT * FROM account_reconciliations
+                       WHERE account_id=? AND kind='bank_statement'
+                         AND balance_type IN ('CLBD','ITBD')
+                       ORDER BY balance_date DESC,
+                                CASE balance_type WHEN 'CLBD' THEN 0 ELSE 1 END,id DESC
+                       LIMIT 1""",
+                    (account["id"],),
+                ).fetchone()
+            else:
+                reconciliation = db.execute(
+                    """SELECT * FROM account_reconciliations
+                       WHERE account_id=? AND kind='cash_count'
+                       ORDER BY balance_date DESC,id DESC LIMIT 1""",
+                    (account["id"],),
+                ).fetchone()
+            if reconciliation is not None:
+                reconciliation_data = dict(reconciliation)
+                calculated = db.execute(
+                    """SELECT ? + COALESCE(SUM(amount_cents),0)
+                       FROM transactions WHERE account_id=? AND booking_date<=?""",
+                    (
+                        account["opening_balance_cents"],
+                        account["id"],
+                        reconciliation["balance_date"],
+                    ),
+                ).fetchone()[0]
+                reconciliation_data["calculated_balance_cents"] = calculated
+                reconciliation_data["difference_cents"] = (
+                    reconciliation["balance_cents"] - calculated
+                )
+                account["reconciliation"] = reconciliation_data
+            else:
+                account["reconciliation"] = None
+            rows.append(account)
         categories = db.execute("SELECT * FROM categories WHERE active=1 ORDER BY name").fetchall()
         return render_template("accounts.html", accounts=rows, categories=categories)
+
+    @app.post("/accounts/<int:account_id>/cash-count")
+    @login_required
+    def cash_count(account_id):
+        db = get_db()
+        account = db.execute(
+            """SELECT * FROM accounts WHERE id=? AND organization_id=?
+               AND kind='cash' AND active=1""",
+            (account_id, ORGANIZATION_ID),
+        ).fetchone()
+        if account is None:
+            abort(404)
+        try:
+            balance_date = datetime.fromisoformat(
+                request.form.get("balance_date", "")
+            ).date().isoformat()
+            balance_cents = parse_amount_cents(request.form.get("balance"))
+        except (ValueError, TypeError):
+            flash("Bitte Zähldatum und gültigen Kassenbestand angeben.", "error")
+            return redirect(url_for("accounts"))
+        if balance_cents < 0:
+            flash("Ein gezählter Kassenbestand darf nicht negativ sein.", "error")
+            return redirect(url_for("accounts"))
+        if year_is_closed(db, balance_date[:4]):
+            flash("Für ein abgeschlossenes Jahr kann kein Zählbestand ergänzt werden.", "error")
+            return redirect(url_for("accounts"))
+        note = request.form.get("note", "").strip()
+        db.execute(
+            """INSERT INTO account_reconciliations(
+                   account_id,kind,balance_type,balance_date,balance_cents,currency,note
+               ) VALUES (?,'cash_count','COUNTED',?,?,?,?)
+               ON CONFLICT(account_id,kind,balance_type,balance_date) DO UPDATE SET
+                   balance_cents=excluded.balance_cents,
+                   currency=excluded.currency,
+                   note=excluded.note,
+                   created_at=CURRENT_TIMESTAMP""",
+            (account_id, balance_date, balance_cents, account["currency"], note),
+        )
+        log_action(
+            db,
+            "cash_counted",
+            "account",
+            account_id,
+            json.dumps({"date": balance_date, "balance_cents": balance_cents}),
+        )
+        db.commit()
+        flash("Gezählter Kassenbestand gespeichert.", "success")
+        return redirect(url_for("accounts"))
 
     @app.post("/accounts/<int:account_id>/cash-entry")
     @login_required
@@ -896,7 +1298,8 @@ def create_app(test_config=None):
             return redirect(url_for("accounts"))
         try:
             db.execute(
-                "UPDATE accounts SET name=?,iban=?,opening_balance_cents=? WHERE id=?",
+                """UPDATE accounts SET name=?,iban=?,opening_balance_cents=?,
+                       opening_balance_source='manual' WHERE id=?""",
                 (name, iban, opening_balance, account_id),
             )
         except sqlite3.IntegrityError:
@@ -962,8 +1365,9 @@ def create_app(test_config=None):
                 return redirect(url_for("import_file"))
             suffix = (report.account_iban or "")[-4:]
             cursor = db.execute(
-                """INSERT INTO accounts(organization_id,name,kind,iban)
-                   VALUES (?,?,'bank',?)""",
+                """INSERT INTO accounts(
+                       organization_id,name,kind,iban,opening_balance_source
+                   ) VALUES (?,?,'bank',?,'camt')""",
                 (ORGANIZATION_ID, f"Bankkonto {suffix}" if suffix else "Bankkonto", report.account_iban),
             )
             account = db.execute("SELECT * FROM accounts WHERE id=?", (cursor.lastrowid,)).fetchone()
@@ -1014,6 +1418,7 @@ def create_app(test_config=None):
                 if "transactions.fingerprint" not in str(exc):
                     raise
                 duplicates += 1
+        balance_count = store_report_balances(db, account["id"], batch_id, report)
         db.execute(
             "UPDATE import_batches SET imported_count=?, duplicate_count=? WHERE id=?",
             (imported, duplicates, batch_id),
@@ -1023,10 +1428,21 @@ def create_app(test_config=None):
             "imported",
             "import_batch",
             batch_id,
-            json.dumps({"filename": original_filename, "imported": imported, "duplicates": duplicates}),
+            json.dumps(
+                {
+                    "filename": original_filename,
+                    "imported": imported,
+                    "duplicates": duplicates,
+                    "balances": balance_count,
+                }
+            ),
         )
         db.commit()
-        flash(f"Import abgeschlossen: {imported} neue Buchungen, {duplicates} Duplikate.", "success")
+        balance_message = f", {balance_count} Kontosalden" if balance_count else ""
+        flash(
+            f"Import abgeschlossen: {imported} neue Buchungen, {duplicates} Duplikate{balance_message}.",
+            "success",
+        )
         return redirect(url_for("transactions", status="uncategorized"))
 
     @app.route("/import", methods=["GET", "POST"])
@@ -1160,6 +1576,168 @@ def create_app(test_config=None):
             as_attachment=True,
         )
 
+    def rule_candidates(db, rule):
+        rows = db.execute(
+            """SELECT t.*,a.name account_name
+               FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id
+               WHERE t.category_id IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM transaction_splits s WHERE s.transaction_id=t.id
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM year_closures y
+                     WHERE y.organization_id=? AND y.year=substr(t.booking_date,1,4)
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM transaction_adjustments x
+                     WHERE x.original_transaction_id=t.id OR x.reversal_transaction_id=t.id
+                        OR x.replacement_transaction_id=t.id
+                 )
+               ORDER BY t.booking_date DESC,t.id DESC""",
+            (ORGANIZATION_ID,),
+        ).fetchall()
+        return [row for row in rows if rule_matches(rule, row)]
+
+    @app.route("/rules", methods=["GET", "POST"])
+    @login_required
+    def classification_rules():
+        db = get_db()
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            account_value = request.form.get("account_id", "").strip()
+            direction = request.form.get("direction", "any")
+            counterparty_contains = request.form.get("counterparty_contains", "").strip()
+            purpose_contains = request.form.get("purpose_contains", "").strip()
+            counterparty_iban = "".join(
+                request.form.get("counterparty_iban", "").upper().split()
+            )
+            receipt_status = request.form.get("receipt_status", "") or None
+            try:
+                category_id = int(request.form.get("category_id", ""))
+                account_id = int(account_value) if account_value else None
+            except ValueError:
+                abort(400)
+            if not name:
+                flash("Bitte einen Namen für die Regel angeben.", "error")
+                return redirect(url_for("classification_rules"))
+            if direction not in {"any", "income", "expense"} or receipt_status not in {
+                None,
+                "missing",
+                "complete",
+                "not_required",
+            }:
+                abort(400)
+            if db.execute(
+                "SELECT 1 FROM categories WHERE id=? AND active=1", (category_id,)
+            ).fetchone() is None:
+                abort(400)
+            if account_id and db.execute(
+                "SELECT 1 FROM accounts WHERE id=? AND organization_id=? AND active=1",
+                (account_id, ORGANIZATION_ID),
+            ).fetchone() is None:
+                abort(400)
+            if not any(
+                [
+                    account_id,
+                    direction != "any",
+                    counterparty_contains,
+                    purpose_contains,
+                    counterparty_iban,
+                ]
+            ):
+                flash("Bitte mindestens ein Erkennungsmerkmal für die Regel angeben.", "error")
+                return redirect(url_for("classification_rules"))
+            cursor = db.execute(
+                """INSERT INTO classification_rules(
+                       name,account_id,direction,counterparty_contains,purpose_contains,
+                       counterparty_iban,category_id,receipt_status
+                   ) VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    name,
+                    account_id,
+                    direction,
+                    counterparty_contains,
+                    purpose_contains,
+                    counterparty_iban,
+                    category_id,
+                    receipt_status,
+                ),
+            )
+            log_action(db, "created", "classification_rule", cursor.lastrowid, name)
+            db.commit()
+            flash("Zuordnungsregel angelegt. Treffer werden zunächst nur vorgeschlagen.", "success")
+            return redirect(url_for("classification_rules"))
+
+        rule_rows = db.execute(
+            """SELECT r.*,c.name category_name,a.name account_name
+               FROM classification_rules r JOIN categories c ON c.id=r.category_id
+               LEFT JOIN accounts a ON a.id=r.account_id
+               WHERE r.active=1 ORDER BY r.id"""
+        ).fetchall()
+        rules = []
+        for rule in rule_rows:
+            matches = rule_candidates(db, rule)
+            item = dict(rule)
+            item["match_count"] = len(matches)
+            item["samples"] = matches[:5]
+            rules.append(item)
+        categories = db.execute("SELECT * FROM categories WHERE active=1 ORDER BY name").fetchall()
+        accounts = db.execute(
+            "SELECT * FROM accounts WHERE organization_id=? AND active=1 ORDER BY kind,name",
+            (ORGANIZATION_ID,),
+        ).fetchall()
+        return render_template(
+            "rules.html", rules=rules, categories=categories, accounts=accounts
+        )
+
+    @app.post("/rules/<int:rule_id>/apply")
+    @login_required
+    def classification_rule_apply(rule_id):
+        db = get_db()
+        rule = db.execute(
+            "SELECT * FROM classification_rules WHERE id=? AND active=1", (rule_id,)
+        ).fetchone()
+        if rule is None:
+            abort(404)
+        matches = rule_candidates(db, rule)
+        for row in matches:
+            if rule["receipt_status"]:
+                db.execute(
+                    """UPDATE transactions SET category_id=?,receipt_status=?,
+                           updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                    (rule["category_id"], rule["receipt_status"], row["id"]),
+                )
+            else:
+                db.execute(
+                    """UPDATE transactions SET category_id=?,updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (rule["category_id"], row["id"]),
+                )
+            log_action(
+                db,
+                "rule_applied",
+                "transaction",
+                row["id"],
+                json.dumps({"rule_id": rule_id, "category_id": rule["category_id"]}),
+            )
+        db.commit()
+        flash(f"Regel auf {len(matches)} Buchungen angewendet.", "success")
+        return redirect(url_for("classification_rules"))
+
+    @app.post("/rules/<int:rule_id>/delete")
+    @login_required
+    def classification_rule_delete(rule_id):
+        db = get_db()
+        cursor = db.execute(
+            "UPDATE classification_rules SET active=0 WHERE id=? AND active=1", (rule_id,)
+        )
+        if not cursor.rowcount:
+            abort(404)
+        log_action(db, "deleted", "classification_rule", rule_id)
+        db.commit()
+        flash("Zuordnungsregel gelöscht.", "success")
+        return redirect(url_for("classification_rules"))
+
     @app.route("/categories", methods=["GET", "POST"])
     @login_required
     def categories():
@@ -1239,17 +1817,48 @@ def create_app(test_config=None):
                     ).fetchall()
                 ]
                 snapshot_transactions.append(item)
-            accounts_snapshot = [
-                dict(row)
-                for row in db.execute(
-                    """SELECT a.id,a.name,a.kind,a.iban,a.currency,a.opening_balance_cents,
-                              a.opening_balance_cents + COALESCE(SUM(t.amount_cents),0) balance_cents
-                       FROM accounts a LEFT JOIN transactions t ON t.account_id=a.id
-                       WHERE a.organization_id=? AND a.active=1
-                       GROUP BY a.id ORDER BY a.kind,a.name""",
-                    (ORGANIZATION_ID,),
-                ).fetchall()
-            ]
+            accounts_snapshot = []
+            for account_row in db.execute(
+                """SELECT id,name,kind,iban,currency,opening_balance_cents
+                   FROM accounts WHERE organization_id=? AND active=1
+                   ORDER BY kind,name""",
+                (ORGANIZATION_ID,),
+            ).fetchall():
+                account = dict(account_row)
+                account["balance_cents"] = db.execute(
+                    """SELECT ? + COALESCE(SUM(amount_cents),0) FROM transactions
+                       WHERE account_id=? AND booking_date<=?""",
+                    (account["opening_balance_cents"], account["id"], f"{year}-12-31"),
+                ).fetchone()[0]
+                reconciliation = db.execute(
+                    """SELECT * FROM account_reconciliations
+                       WHERE account_id=? AND substr(balance_date,1,4)=?
+                         AND ((kind='bank_statement' AND balance_type IN ('CLBD','ITBD'))
+                              OR kind='cash_count')
+                       ORDER BY balance_date DESC,
+                                CASE balance_type WHEN 'CLBD' THEN 0 ELSE 1 END,id DESC
+                       LIMIT 1""",
+                    (account["id"], year),
+                ).fetchone()
+                if reconciliation is not None:
+                    calculated = db.execute(
+                        """SELECT ? + COALESCE(SUM(amount_cents),0) FROM transactions
+                           WHERE account_id=? AND booking_date<=?""",
+                        (
+                            account["opening_balance_cents"],
+                            account["id"],
+                            reconciliation["balance_date"],
+                        ),
+                    ).fetchone()[0]
+                    account["reconciliation"] = {
+                        "balance_date": reconciliation["balance_date"],
+                        "balance_cents": reconciliation["balance_cents"],
+                        "calculated_balance_cents": calculated,
+                        "difference_cents": reconciliation["balance_cents"] - calculated,
+                    }
+                else:
+                    account["reconciliation"] = None
+                accounts_snapshot.append(account)
             organization = db.execute(
                 "SELECT name FROM organizations WHERE id=?", (ORGANIZATION_ID,)
             ).fetchone()
@@ -1365,7 +1974,57 @@ def create_app(test_config=None):
             "SELECT * FROM year_closures WHERE organization_id=? AND year=?",
             (ORGANIZATION_ID, year),
         ).fetchone()
-        return {**dict(totals), "year": year, "closure": closure}
+        reconciliation_checks = 0
+        reconciliation_issues = 0
+        missing_cash_counts = 0
+        for account in db.execute(
+            "SELECT * FROM accounts WHERE organization_id=? AND active=1",
+            (ORGANIZATION_ID,),
+        ).fetchall():
+            if account["kind"] == "cash":
+                has_year_transactions = db.execute(
+                    """SELECT 1 FROM transactions
+                       WHERE account_id=? AND substr(booking_date,1,4)=? LIMIT 1""",
+                    (account["id"], year),
+                ).fetchone()
+                year_end_count = db.execute(
+                    """SELECT 1 FROM account_reconciliations
+                       WHERE account_id=? AND kind='cash_count'
+                         AND balance_date=? LIMIT 1""",
+                    (account["id"], f"{year}-12-31"),
+                ).fetchone()
+                missing_cash_counts += bool(has_year_transactions and not year_end_count)
+            reconciliation = db.execute(
+                """SELECT * FROM account_reconciliations
+                   WHERE account_id=? AND substr(balance_date,1,4)=?
+                     AND ((kind='bank_statement' AND balance_type IN ('CLBD','ITBD'))
+                          OR kind='cash_count')
+                   ORDER BY balance_date DESC,
+                            CASE balance_type WHEN 'CLBD' THEN 0 ELSE 1 END,id DESC
+                   LIMIT 1""",
+                (account["id"], year),
+            ).fetchone()
+            if reconciliation is None:
+                continue
+            calculated = db.execute(
+                """SELECT ? + COALESCE(SUM(amount_cents),0) FROM transactions
+                   WHERE account_id=? AND booking_date<=?""",
+                (
+                    account["opening_balance_cents"],
+                    account["id"],
+                    reconciliation["balance_date"],
+                ),
+            ).fetchone()[0]
+            reconciliation_checks += 1
+            reconciliation_issues += calculated != reconciliation["balance_cents"]
+        return {
+            **dict(totals),
+            "year": year,
+            "closure": closure,
+            "reconciliation_checks": reconciliation_checks,
+            "reconciliation_issues": reconciliation_issues,
+            "missing_cash_counts": missing_cash_counts,
+        }
 
     @app.get("/year-close")
     @login_required
@@ -1407,6 +2066,18 @@ def create_app(test_config=None):
                 f"{status['uncategorized']} Buchungen ohne Kategorie.",
                 "error",
             )
+        elif status["reconciliation_issues"]:
+            flash(
+                f"Abschluss nicht möglich: {status['reconciliation_issues']} Konto- oder "
+                "Kassenabgleich weist eine Abweichung auf.",
+                "error",
+            )
+        elif status["missing_cash_counts"]:
+            flash(
+                "Abschluss nicht möglich: Für die im Jahr verwendete Barkasse fehlt der "
+                "Zählbestand zum 31.12.",
+                "error",
+            )
         else:
             payload = {
                 "transactions": [
@@ -1439,6 +2110,14 @@ def create_app(test_config=None):
                         """SELECT x.* FROM transaction_adjustments x
                            JOIN transactions t ON t.id=x.original_transaction_id
                            WHERE substr(t.booking_date,1,4)=? ORDER BY x.id""",
+                        (year,),
+                    ).fetchall()
+                ],
+                "reconciliations": [
+                    dict(row)
+                    for row in db.execute(
+                        """SELECT * FROM account_reconciliations
+                           WHERE substr(balance_date,1,4)=? ORDER BY id""",
                         (year,),
                     ).fetchall()
                 ],
@@ -1533,6 +2212,57 @@ def create_app(test_config=None):
                         ]
                     )
                 add_file(archive, "korrekturen.csv", "\ufeff" + adjustment_output.getvalue())
+            reconciliations = db.execute(
+                """SELECT r.*,a.name account_name,a.opening_balance_cents
+                   FROM account_reconciliations r JOIN accounts a ON a.id=r.account_id
+                   WHERE substr(r.balance_date,1,4)=?
+                     AND ((r.kind='bank_statement' AND r.balance_type IN ('CLBD','ITBD'))
+                          OR r.kind='cash_count')
+                   ORDER BY r.balance_date,r.id""",
+                (year,),
+            ).fetchall()
+            if reconciliations:
+                reconciliation_output = io.StringIO()
+                reconciliation_writer = csv.writer(reconciliation_output, delimiter=";")
+                reconciliation_writer.writerow(
+                    [
+                        "Konto",
+                        "Art",
+                        "Stichtag",
+                        "Gemeldeter Bestand",
+                        "Berechneter Bestand",
+                        "Abweichung",
+                        "Währung",
+                        "Notiz",
+                    ]
+                )
+                for reconciliation in reconciliations:
+                    calculated = db.execute(
+                        """SELECT ? + COALESCE(SUM(amount_cents),0) FROM transactions
+                           WHERE account_id=? AND booking_date<=?""",
+                        (
+                            reconciliation["opening_balance_cents"],
+                            reconciliation["account_id"],
+                            reconciliation["balance_date"],
+                        ),
+                    ).fetchone()[0]
+                    reconciliation_writer.writerow(
+                        [
+                            reconciliation["account_name"],
+                            reconciliation["balance_type"],
+                            reconciliation["balance_date"],
+                            f"{reconciliation['balance_cents']/100:.2f}".replace(".", ","),
+                            f"{calculated/100:.2f}".replace(".", ","),
+                            f"{(reconciliation['balance_cents']-calculated)/100:.2f}".replace(".", ","),
+                            reconciliation["currency"],
+                            reconciliation["note"] or "",
+                        ]
+                    )
+                add_file(
+                    archive,
+                    "kontenabgleich.csv",
+                    "\ufeff" + reconciliation_output.getvalue(),
+                )
             attachments = db.execute(
                 """SELECT a.*,t.id transaction_id FROM attachments a JOIN transactions t ON t.id=a.transaction_id
                    WHERE substr(t.booking_date,1,4)=? ORDER BY a.id""",
@@ -1563,6 +2293,7 @@ def create_app(test_config=None):
                 "transactions": len(transactions),
                 "attachments": len(attachments),
                 "adjustments": len(adjustments),
+                "reconciliations": len(reconciliations),
             }
             add_file(archive, "pruefbericht.json", json.dumps(report, ensure_ascii=False, indent=2))
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode())

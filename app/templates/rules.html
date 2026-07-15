@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Automatische Vorschläge</div><h1>Zuordnungsregeln</h1><p class="muted">Regeln zeigen ihre Treffer zunächst als Vorschau. Erst dein Klick übernimmt die Kategorie und optional den Belegstatus.</p></div><a class="button" href="{{ url_for('transactions', status='uncategorized') }}">Offene Buchungen</a></div>
+<div class="grid rule-layout">
+  <section class="card">
+    <h2>Neue Regel</h2>
+    <form method="post" class="stack compact-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Name<input name="name" required placeholder="z. B. Mitgliedsbeitrag Schommers"></label>
+      <div class="form-row two-columns"><label>Konto<select name="account_id"><option value="">Alle Konten</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}</option>{% endfor %}</select></label><label>Richtung<select name="direction"><option value="any">Einnahmen und Ausgaben</option><option value="income">Nur Einnahmen</option><option value="expense">Nur Ausgaben</option></select></label></div>
+      <label>Gegenpartei enthält<input name="counterparty_contains" placeholder="z. B. Thomas Schommers"></label>
+      <label>Verwendungszweck enthält<input name="purpose_contains" placeholder="z. B. Mitgliedsbeitrag"></label>
+      <label>Gegenkonto-IBAN ist exakt<input name="counterparty_iban" placeholder="DE…"></label>
+      <div class="form-row two-columns"><label>Kategorie<select name="category_id" required><option value="">Kategorie wählen</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></label><label>Belegstatus<select name="receipt_status"><option value="">Nicht verändern</option><option value="missing">Beleg fehlt</option><option value="complete">Vollständig</option><option value="not_required">Kein Beleg erforderlich</option></select></label></div>
+      <button class="button primary" type="submit">Regel speichern</button>
+    </form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h2>Aktive Regeln</h2><p class="muted">Nur offene, noch nicht kategorisierte Buchungen werden vorgeschlagen.</p></div></div>
+    {% if rules %}<div class="rule-list">{% for rule in rules %}<article>
+      <div class="rule-head"><div><strong>{{ rule.name }}</strong><small>{{ rule.category_name }}{% if rule.receipt_status %} · Belegstatus wird gesetzt{% endif %}{% if rule.account_name %} · {{ rule.account_name }}{% endif %}</small></div><span class="badge {{ 'complete' if rule.match_count else 'not_required' }}">{{ rule.match_count }} Treffer</span></div>
+      <div class="rule-conditions">{% if rule.counterparty_contains %}<span>Gegenpartei: „{{ rule.counterparty_contains }}“</span>{% endif %}{% if rule.purpose_contains %}<span>Zweck: „{{ rule.purpose_contains }}“</span>{% endif %}{% if rule.counterparty_iban %}<span>IBAN: {{ rule.counterparty_iban }}</span>{% endif %}{% if rule.direction != 'any' %}<span>{{ 'Einnahmen' if rule.direction == 'income' else 'Ausgaben' }}</span>{% endif %}</div>
+      {% if rule.samples %}<details><summary>Treffer ansehen</summary><div class="rule-samples">{% for tx in rule.samples %}<a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span>{{ tx.booking_date|date_de }} · {{ tx.counterparty or tx.purpose }}</span><strong>{{ tx.amount_cents|money(tx.currency) }}</strong></a>{% endfor %}{% if rule.match_count > 5 %}<small>und {{ rule.match_count - 5 }} weitere</small>{% endif %}</div></details>{% endif %}
+      <div class="actions"><form method="post" action="{{ url_for('classification_rule_apply', rule_id=rule.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button primary small" type="submit" {{ 'disabled' if not rule.match_count }}>Auf {{ rule.match_count }} Treffer anwenden</button></form><form method="post" action="{{ url_for('classification_rule_delete', rule_id=rule.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button danger small" type="submit">Regel löschen</button></form></div>
+    </article>{% endfor %}</div>{% else %}<div class="empty compact">Noch keine Zuordnungsregel angelegt.</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

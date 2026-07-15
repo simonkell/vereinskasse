@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     iban TEXT,
     currency TEXT NOT NULL DEFAULT 'EUR',
     opening_balance_cents INTEGER NOT NULL DEFAULT 0,
+    opening_balance_source TEXT NOT NULL DEFAULT 'manual',
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(organization_id, name),
@@ -132,6 +133,36 @@ CREATE TABLE IF NOT EXISTS transaction_adjustments (
     reason TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS classification_rules (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    account_id INTEGER REFERENCES accounts(id),
+    direction TEXT NOT NULL DEFAULT 'any'
+        CHECK(direction IN ('any', 'income', 'expense')),
+    counterparty_contains TEXT,
+    purpose_contains TEXT,
+    counterparty_iban TEXT,
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    receipt_status TEXT
+        CHECK(receipt_status IS NULL OR receipt_status IN ('missing', 'complete', 'not_required')),
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS account_reconciliations (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    import_batch_id INTEGER REFERENCES import_batches(id),
+    kind TEXT NOT NULL CHECK(kind IN ('bank_statement', 'cash_count')),
+    balance_type TEXT NOT NULL,
+    balance_date TEXT NOT NULL,
+    balance_cents INTEGER NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'EUR',
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, kind, balance_type, balance_date)
+);
 """
 
 
@@ -170,10 +201,13 @@ def init_db():
     db.execute("INSERT OR IGNORE INTO organizations(id, name) VALUES (1, 'Mein Verein')")
     _ensure_column(db, "import_batches", "account_id", "INTEGER REFERENCES accounts(id)")
     _ensure_column(db, "transactions", "account_id", "INTEGER REFERENCES accounts(id)")
+    _ensure_column(db, "accounts", "opening_balance_source", "TEXT NOT NULL DEFAULT 'legacy'")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction ON transaction_splits(transaction_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_original ON transaction_adjustments(original_transaction_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_classification_rules_account ON classification_rules(account_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_account_reconciliations_account_date ON account_reconciliations(account_id,balance_date)")
     _migrate_existing_accounts(db)
     db.executemany(
         "INSERT OR IGNORE INTO categories(name, tax_area) VALUES (?, ?)",
