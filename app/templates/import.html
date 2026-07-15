@@ -1,17 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-head"><div><div class="eyebrow">Bankumsätze</div><h1>CAMT importieren</h1><p class="muted">Originaldateien bleiben unverändert erhalten; bereits importierte Umsätze werden erkannt.</p></div></div>
+<div class="page-head"><div><div class="eyebrow">Bankumsätze</div><h1>Umsätze importieren</h1><p class="muted">CAMT und MT940 direkt einlesen oder eine CSV-Datei mit Vorschau zuordnen.</p></div></div>
 <div class="grid two import-grid">
   <section class="card">
-    <h2>Neue Datei</h2>
+    <h2>CAMT oder MT940</h2>
+    <p class="muted">Standardisierte Bankdateien können direkt geprüft und importiert werden.</p>
     <form method="post" enctype="multipart/form-data" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Bankkonto<select name="account_id"><option value="">Automatisch anhand der IBAN erkennen</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}{% if account.iban %} · {{ account.iban }}{% endif %}</option>{% endfor %}</select></label>
-      <label class="dropzone"><strong>CAMT.052 oder CAMT.053 auswählen</strong><span>XML-Datei aus dem Onlinebanking</span><input type="file" name="statement" accept=".xml,application/xml,text/xml" required></label>
+      <label class="dropzone"><strong>CAMT.052, CAMT.053 oder MT940</strong><span>XML-, MT940-, STA- oder TXT-Datei aus dem Onlinebanking</span><input type="file" name="statement" accept=".xml,.mt940,.sta,.txt,application/xml,text/xml,text/plain" required></label>
       <button class="button primary" type="submit">Datei prüfen und importieren</button>
     </form>
   </section>
-  <section class="card info-card"><h2>Was passiert beim Import?</h2><ol><li>Die XML-Struktur und Buchungen werden geprüft.</li><li>Die Originaldatei wird mit Prüfsumme archiviert.</li><li>Bereits bekannte Buchungen werden übersprungen.</li><li>Neue Buchungen landen in der Belegprüfung.</li></ol></section>
+  <section class="card">
+    <h2>CSV mit Vorschau</h2>
+    <p class="muted">Spalten unterscheiden sich je Bank. Deshalb bestätigst du die Zuordnung vor dem Import.</p>
+    <form method="post" action="{{ url_for('import_csv_preview') }}" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Bankkonto<select name="account_id" required><option value="">Bitte auswählen</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}{% if account.iban %} · {{ account.iban }}{% endif %}</option>{% endfor %}</select></label>
+      <label class="dropzone"><strong>CSV-Datei auswählen</strong><span>Trennzeichen und Zeichenkodierung werden automatisch erkannt</span><input type="file" name="statement" accept=".csv,text/csv,application/csv" required></label>
+      <button class="button" type="submit">CSV-Vorschau öffnen</button>
+    </form>
+  </section>
 </div>
+<section class="card info-card"><h2>Sicherer Import</h2><ol><li>Dateistruktur und Buchungen werden vor dem Speichern geprüft.</li><li>Die unveränderte Originaldatei wird mit SHA-256-Prüfsumme archiviert.</li><li>Bereits bekannte Buchungen werden anhand ihres Fingerprints übersprungen.</li><li>Abgeschlossene Geschäftsjahre bleiben gegen neue Importe gesperrt.</li></ol></section>
 <section class="card"><div class="card-head"><h2>Importverlauf</h2></div>{% if batches %}<div class="batch-list">{% for batch in batches %}<div><div><strong>{{ batch.filename }}</strong><small>{{ batch.created_at }} · {{ batch.account_name or batch.account_iban or 'Konto nicht angegeben' }}</small></div><span>{{ batch.imported_count }} neu · {{ batch.duplicate_count }} Duplikate</span><a href="{{ url_for('import_download', batch_id=batch.id) }}">Original</a></div>{% endfor %}</div>{% else %}<div class="empty">Noch keine Dateien importiert.</div>{% endif %}</section>
 {% endblock %}

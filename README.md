@@ -1,12 +1,13 @@
 # Vereinskasse
 
 Eine kleine, selbst gehostete Kassenverwaltung für Vereine. Bankumsätze werden aus
-CAMT.052- oder CAMT.053-Dateien übernommen und anschließend kategorisiert und mit
-digitalen Belegen vervollständigt.
+CAMT-, MT940- oder flexibel zugeordneten CSV-Dateien übernommen und anschließend
+kategorisiert und mit digitalen Belegen vervollständigt.
 
 ## Funktionsumfang
 
-- CAMT.052/CAMT.053-Import mit Duplikaterkennung
+- CAMT.052/CAMT.053- und MT940-Import mit Duplikaterkennung
+- frei zuordenbarer CSV-Import mit Vorschau und automatischer Spaltenerkennung
 - bis zu drei Bankkonten und eine manuell geführte Barkasse
 - Anfangsbestand und laufender Saldo je Konto
 - Barbuchungen im gemeinsamen Buchungsjournal
@@ -143,9 +144,9 @@ python -m unittest discover -s tests -v
 
 ## Datenmodell und Nachvollziehbarkeit
 
-Jede Bankbuchung erhält einen stabilen Fingerprint aus Konto, Datum, Betrag,
+Jede Bankbuchung erhält unabhängig vom Importformat einen stabilen Fingerprint aus Konto, Datum, Betrag,
 Bankreferenz, Gegenpartei und Verwendungszweck. Wiederholte Kontoauszüge erzeugen so
-keine doppelten Buchungen. Die Original-CAMT-Datei und jeder Beleg werden mit einer
+keine doppelten Buchungen. Die Original-Kontoauszugsdatei und jeder Beleg werden mit einer
 Prüfsumme gespeichert. Bankdaten lassen sich über die Oberfläche nicht verändern;
 ergänzt werden nur Kategorie, Belegstatus und interne Notiz.
 
@@ -166,7 +167,6 @@ Wiederöffnen bleibt möglich und wird im Prüfprotokoll festgehalten.
 - revisionssichere Korrektur-/Stornobuchungen
 - PDF-Kassenbericht
 - automatische Belegerkennung/OCR
-- MT940- und frei konfigurierbare CSV-Importe
 
 Diese Punkte sollten anhand des echten Vereinsablaufs priorisiert werden, statt sie
 vorab in die erste Version einzubauen.

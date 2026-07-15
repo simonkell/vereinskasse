@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app import create_app
 from tests.test_camt import CAMT
+from tests.test_importers import CSV_STATEMENT, MT940
 
 
 class AppTest(unittest.TestCase):
@@ -68,6 +69,79 @@ class AppTest(unittest.TestCase):
         self.assertEqual(account[1], "DE02120300000000202051")
         self.assertEqual(account[2], "bank")
         self.assertEqual(assigned, 2)
+
+    def test_mt940_import_uses_same_journal(self):
+        response = self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(MT940.encode("cp1252")), "umsatz.mt940")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        amounts = [row[0] for row in connection.execute("SELECT amount_cents FROM transactions ORDER BY id")]
+        batch = connection.execute("SELECT filename,imported_count FROM import_batches").fetchone()
+        connection.close()
+        self.assertEqual(amounts, [4250, -1999])
+        self.assertEqual(batch, ("umsatz.mt940", 2))
+
+    def test_camt_and_mt940_versions_of_same_transactions_are_duplicates(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "umsatz.xml")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(MT940.encode("cp1252")), "umsatz.mt940")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        transaction_count = connection.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        second_batch = connection.execute(
+            "SELECT imported_count,duplicate_count FROM import_batches ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        connection.close()
+        self.assertEqual(transaction_count, 2)
+        self.assertEqual(second_batch, (0, 2))
+
+    def test_csv_preview_and_mapping_import(self):
+        self.client.post(
+            "/accounts",
+            data={
+                "csrf_token": self.csrf(), "kind": "bank", "name": "Vereinskonto",
+                "iban": "DE02120300000000202051", "opening_balance": "0",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        account_id = connection.execute("SELECT id FROM accounts").fetchone()[0]
+        connection.close()
+        preview = self.client.post(
+            "/import/csv/preview",
+            data={
+                "csrf_token": self.csrf(), "account_id": str(account_id),
+                "statement": (io.BytesIO(CSV_STATEMENT.encode()), "umsatz.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn("Spalten zuordnen".encode(), preview.data)
+        with self.client.session_transaction() as session:
+            token = session["csv_preview"]["token"]
+        response = self.client.post(
+            "/import/csv/complete",
+            data={
+                "csrf_token": self.csrf(), "token": token,
+                "booking_date": "Buchungstag", "value_date": "Valutadatum",
+                "counterparty": "Begünstigter/Zahlungspflichtiger",
+                "purpose": "Verwendungszweck", "amount": "Betrag",
+                "currency": "Währung", "reference": "Referenz",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        amounts = [row[0] for row in connection.execute("SELECT amount_cents FROM transactions ORDER BY id")]
+        connection.close()
+        self.assertEqual(amounts, [4250, -1999])
 
     def test_cash_entry_is_added_to_shared_journal(self):
         self.client.post(

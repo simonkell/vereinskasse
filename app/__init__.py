@@ -6,6 +6,7 @@ import hmac
 import io
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -32,7 +33,9 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from .camt import parse_camt
+from .csv_import import parse_csv, preview_csv
 from .db import close_db, get_db, init_db, log_action
+from .mt940 import parse_mt940
 
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
@@ -629,39 +632,11 @@ def create_app(test_config=None):
         flash("Kontodaten gespeichert.", "success")
         return redirect(url_for("accounts"))
 
-    @app.route("/import", methods=["GET", "POST"])
-    @login_required
-    def import_file():
-        if request.method == "GET":
-            db = get_db()
-            batches = db.execute(
-                """SELECT b.*, a.name account_name FROM import_batches b
-                   LEFT JOIN accounts a ON a.id=b.account_id
-                   WHERE b.stored_path != '' ORDER BY b.created_at DESC LIMIT 20"""
-            ).fetchall()
-            accounts = db.execute(
-                "SELECT * FROM accounts WHERE organization_id=? AND kind='bank' AND active=1 ORDER BY name",
-                (ORGANIZATION_ID,),
-            ).fetchall()
-            return render_template("import.html", batches=batches, accounts=accounts)
-
-        upload = request.files.get("statement")
-        if not upload or not upload.filename:
-            flash("Bitte eine CAMT-Datei auswählen.", "error")
-            return redirect(url_for("import_file"))
-        temporary = Path(app.config["DATA_DIR"]) / "imports" / f"tmp-{uuid.uuid4().hex}.xml"
-        upload.save(temporary)
-        file_hash = hashlib.sha256(temporary.read_bytes()).hexdigest()
+    def complete_import(report, temporary, file_hash, original_filename, selected_account_id=None):
         db = get_db()
         if db.execute("SELECT 1 FROM import_batches WHERE file_hash=?", (file_hash,)).fetchone():
             temporary.unlink(missing_ok=True)
-            flash("Diese CAMT-Datei wurde bereits importiert.", "error")
-            return redirect(url_for("import_file"))
-        try:
-            report = parse_camt(temporary)
-        except ValueError as exc:
-            temporary.unlink(missing_ok=True)
-            flash(str(exc), "error")
+            flash("Diese Kontoauszugsdatei wurde bereits importiert.", "error")
             return redirect(url_for("import_file"))
         closed_years = sorted(
             {tx.booking_date[:4] for tx in report.transactions if year_is_closed(db, tx.booking_date[:4])}
@@ -674,7 +649,6 @@ def create_app(test_config=None):
             )
             return redirect(url_for("import_file"))
 
-        selected_account_id = request.form.get("account_id")
         account = None
         if selected_account_id:
             account = db.execute(
@@ -713,14 +687,16 @@ def create_app(test_config=None):
             )
             account = db.execute("SELECT * FROM accounts WHERE id=?", (cursor.lastrowid,)).fetchone()
 
-        final_path = Path(app.config["DATA_DIR"]) / "imports" / f"{file_hash}.xml"
+        safe_filename = secure_filename(original_filename) or "kontoauszug"
+        suffix = Path(safe_filename).suffix.lower()
+        final_path = Path(app.config["DATA_DIR"]) / "imports" / f"{file_hash}{suffix}"
         shutil.move(temporary, final_path)
         cursor = db.execute(
             """INSERT INTO import_batches(account_id,filename,file_hash,stored_path,account_iban)
                VALUES (?,?,?,?,?)""",
             (
                 account["id"],
-                secure_filename(upload.filename) or "kontoauszug.xml",
+                safe_filename,
                 file_hash,
                 str(final_path.relative_to(app.config["DATA_DIR"])),
                 report.account_iban,
@@ -766,11 +742,130 @@ def create_app(test_config=None):
             "imported",
             "import_batch",
             batch_id,
-            json.dumps({"filename": upload.filename, "imported": imported, "duplicates": duplicates}),
+            json.dumps({"filename": original_filename, "imported": imported, "duplicates": duplicates}),
         )
         db.commit()
         flash(f"Import abgeschlossen: {imported} neue Buchungen, {duplicates} Duplikate.", "success")
         return redirect(url_for("transactions", status="uncategorized"))
+
+    @app.route("/import", methods=["GET", "POST"])
+    @login_required
+    def import_file():
+        if request.method == "GET":
+            db = get_db()
+            batches = db.execute(
+                """SELECT b.*, a.name account_name FROM import_batches b
+                   LEFT JOIN accounts a ON a.id=b.account_id
+                   WHERE b.stored_path != '' ORDER BY b.created_at DESC LIMIT 20"""
+            ).fetchall()
+            accounts = db.execute(
+                "SELECT * FROM accounts WHERE organization_id=? AND kind='bank' AND active=1 ORDER BY name",
+                (ORGANIZATION_ID,),
+            ).fetchall()
+            return render_template("import.html", batches=batches, accounts=accounts)
+
+        upload = request.files.get("statement")
+        if not upload or not upload.filename:
+            flash("Bitte eine CAMT- oder MT940-Datei auswählen.", "error")
+            return redirect(url_for("import_file"))
+        suffix = Path(secure_filename(upload.filename)).suffix.lower()
+        parser = parse_camt if suffix == ".xml" else parse_mt940 if suffix in {".mt940", ".sta", ".txt"} else None
+        if parser is None:
+            flash("Direkt unterstützt werden XML (CAMT) sowie MT940-, STA- und TXT-Dateien.", "error")
+            return redirect(url_for("import_file"))
+        temporary = Path(app.config["DATA_DIR"]) / "imports" / f"tmp-{uuid.uuid4().hex}{suffix}"
+        upload.save(temporary)
+        file_hash = hashlib.sha256(temporary.read_bytes()).hexdigest()
+        try:
+            report = parser(temporary)
+        except ValueError as exc:
+            temporary.unlink(missing_ok=True)
+            flash(str(exc), "error")
+            return redirect(url_for("import_file"))
+        return complete_import(
+            report,
+            temporary,
+            file_hash,
+            upload.filename,
+            request.form.get("account_id"),
+        )
+
+    @app.post("/import/csv/preview")
+    @login_required
+    def import_csv_preview():
+        upload = request.files.get("statement")
+        account_id = request.form.get("account_id")
+        if not upload or not upload.filename or not account_id:
+            flash("Bitte CSV-Datei und zugehöriges Bankkonto auswählen.", "error")
+            return redirect(url_for("import_file"))
+        db = get_db()
+        account = db.execute(
+            """SELECT * FROM accounts WHERE id=? AND organization_id=?
+               AND kind='bank' AND active=1""",
+            (account_id, ORGANIZATION_ID),
+        ).fetchone()
+        if account is None:
+            abort(400, "Ungültiges Bankkonto")
+        previous = session.get("csv_preview") or {}
+        previous_token = previous.get("token", "")
+        if re.fullmatch(r"[0-9a-f]{48}", str(previous_token)):
+            previous_path = Path(app.config["DATA_DIR"]) / "imports" / f"preview-{previous_token}.csv"
+            previous_path.unlink(missing_ok=True)
+        token = secrets.token_hex(24)
+        temporary = Path(app.config["DATA_DIR"]) / "imports" / f"preview-{token}.csv"
+        upload.save(temporary)
+        try:
+            preview = preview_csv(temporary)
+        except ValueError as exc:
+            temporary.unlink(missing_ok=True)
+            flash(str(exc), "error")
+            return redirect(url_for("import_file"))
+        session["csv_preview"] = {
+            "token": token,
+            "filename": secure_filename(upload.filename) or "kontoauszug.csv",
+            "account_id": int(account_id),
+        }
+        return render_template("import_csv_preview.html", preview=preview, account=account, token=token)
+
+    @app.post("/import/csv/complete")
+    @login_required
+    def import_csv_complete():
+        saved = session.get("csv_preview") or {}
+        token = request.form.get("token", "")
+        if not secrets.compare_digest(token, str(saved.get("token", ""))):
+            abort(400, "Ungültige oder abgelaufene CSV-Vorschau")
+        temporary = Path(app.config["DATA_DIR"]) / "imports" / f"preview-{token}.csv"
+        if not temporary.exists():
+            abort(400, "Die CSV-Vorschau ist nicht mehr verfügbar")
+        db = get_db()
+        account = db.execute(
+            """SELECT * FROM accounts WHERE id=? AND organization_id=?
+               AND kind='bank' AND active=1""",
+            (saved.get("account_id"), ORGANIZATION_ID),
+        ).fetchone()
+        if account is None:
+            temporary.unlink(missing_ok=True)
+            abort(400, "Ungültiges Bankkonto")
+        fields = (
+            "booking_date", "value_date", "amount", "counterparty", "purpose",
+            "reference", "currency", "counterparty_iban",
+        )
+        mapping = {field: request.form.get(field, "") for field in fields}
+        try:
+            report = parse_csv(temporary, mapping, account["iban"] or "")
+        except ValueError as exc:
+            temporary.unlink(missing_ok=True)
+            session.pop("csv_preview", None)
+            flash(str(exc), "error")
+            return redirect(url_for("import_file"))
+        session.pop("csv_preview", None)
+        return complete_import(
+            report,
+            temporary,
+            hashlib.sha256(temporary.read_bytes()).hexdigest(),
+            saved["filename"],
+            account["id"],
+        )
 
     @app.get("/imports/<int:batch_id>/original")
     @login_required

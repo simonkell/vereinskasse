@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">CSV-Import</div><h1>Spalten zuordnen</h1><p class="muted">Prüfe die erkannten Spalten für {{ account.name }}. Erst danach werden Buchungen gespeichert.</p></div><a class="button" href="{{ url_for('import_file') }}">Abbrechen</a></div>
+<form method="post" action="{{ url_for('import_csv_complete') }}" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="token" value="{{ token }}">
+  <section class="card">
+    <div class="card-head"><div><h2>Zuordnung</h2><small>{{ preview.headers|length }} Spalten · Trennzeichen „{{ preview.delimiter }}“ · {{ preview.encoding }}</small></div></div>
+    {% set fields = [('booking_date','Buchungsdatum *'),('value_date','Valutadatum'),('amount','Betrag *'),('counterparty','Gegenpartei'),('purpose','Verwendungszweck *'),('reference','Bankreferenz'),('currency','Währung'),('counterparty_iban','IBAN der Gegenpartei')] %}
+    <div class="mapping-grid">{% for field, label in fields %}<label>{{ label }}<select name="{{ field }}"{% if field in ['booking_date','amount','purpose'] %} required{% endif %}><option value="">Nicht importieren</option>{% for header in preview.headers %}<option value="{{ header }}"{% if preview.detected.get(field) == header %} selected{% endif %}>{{ header }}</option>{% endfor %}</select></label>{% endfor %}</div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Dateivorschau</h2><small>Die ersten {{ preview.rows|length }} Buchungszeilen</small></div>
+    <div class="preview-table-wrap"><table><thead><tr>{% for header in preview.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead><tbody>{% for row in preview.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+  </section>
+  <div class="actions"><button class="button primary" type="submit">Zuordnung bestätigen und importieren</button><a class="button" href="{{ url_for('import_file') }}">Abbrechen</a></div>
+</form>
+{% endblock %}
