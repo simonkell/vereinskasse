@@ -24,8 +24,9 @@ kategorisiert und mit digitalen Belegen vervollständigt.
 - Splitbuchungen mit vollständiger Betragskontrolle
 - unveränderliche Storno- und Korrekturketten für manuelle Barkassenbuchungen
 - Jahresabschluss mit Vollständigkeitsprüfung und Änderungssperre
+- druckfertiger PDF-Kassenbericht als Vorschau und endgültige Abschlussfassung
 - eigenständig archivierbares ZIP je abgeschlossenem Jahr mit Buchungen, Belegen,
-  Originalimporten, Kontenabgleich, Prüfbericht und SHA-256-Manifest
+  PDF-Kassenbericht, Originalimporten, Kontenabgleich, Prüfbericht und SHA-256-Manifest
 - Prüfprotokoll für Importe, Beleguploads und fachliche Änderungen
 - zeitlich begrenzte, widerrufbare Nur-Lese-Freigaben für Kassenprüfer
 - unveränderliche Prüfungsstände, die spätere Änderungen nicht rückwirkend verändern
@@ -178,7 +179,6 @@ tatsächlichen Kontoauszug abbilden.
 
 - direkter FinTS-/HBCI-Abruf
 - mehrere Benutzer und Rollen
-- PDF-Kassenbericht
 - automatische Belegerkennung/OCR
 
 Diese Punkte sollten anhand des echten Vereinsablaufs priorisiert werden, statt sie

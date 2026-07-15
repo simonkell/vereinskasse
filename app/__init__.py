@@ -37,6 +37,7 @@ from .camt import _fingerprint, parse_camt
 from .csv_import import parse_csv, preview_csv
 from .db import close_db, get_db, init_db, log_action
 from .mt940 import parse_mt940
+from .pdf_report import build_year_report_data, render_year_report
 
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "webp", "heic", "heif"}
@@ -2056,6 +2057,32 @@ def create_app(test_config=None):
         ]
         return render_template("year_close.html", years=[year_status(db, year) for year in years])
 
+    @app.get("/years/<year>/report.pdf")
+    @login_required
+    def year_report(year):
+        if len(year) != 4 or not year.isdigit():
+            abort(400)
+        db = get_db()
+        closure = db.execute(
+            "SELECT * FROM year_closures WHERE organization_id=? AND year=?",
+            (ORGANIZATION_ID, year),
+        ).fetchone()
+        has_transactions = db.execute(
+            "SELECT 1 FROM transactions WHERE substr(booking_date,1,4)=? LIMIT 1",
+            (year,),
+        ).fetchone()
+        if has_transactions is None:
+            flash("Für dieses Geschäftsjahr sind noch keine Buchungen vorhanden.", "error")
+            return redirect(url_for("year_close"))
+        report_data = build_year_report_data(db, ORGANIZATION_ID, year, closure)
+        output = io.BytesIO(render_year_report(report_data))
+        return send_file(
+            output,
+            mimetype="application/pdf",
+            as_attachment=request.args.get("download") == "1",
+            download_name=f"kassenbericht-{year}.pdf",
+        )
+
     @app.post("/year-close/<year>")
     @login_required
     def year_close_update(year):
@@ -2300,6 +2327,8 @@ def create_app(test_config=None):
                 path = Path(app.config["DATA_DIR"]) / batch["stored_path"]
                 if path.exists():
                     add_file(archive, f"importe/{batch['id']}-{secure_filename(batch['filename'])}", path.read_bytes())
+            report_data = build_year_report_data(db, ORGANIZATION_ID, year, closure)
+            add_file(archive, "kassenbericht.pdf", render_year_report(report_data))
             report = {
                 "organization": organization["name"],
                 "year": year,

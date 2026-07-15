@@ -1,4 +1,5 @@
 import io
+import json
 import re
 import sqlite3
 import tempfile
@@ -652,6 +653,14 @@ class AppTest(unittest.TestCase):
         connection.commit()
         transaction_id = connection.execute("SELECT id FROM transactions LIMIT 1").fetchone()[0]
         connection.close()
+        preview_response = self.client.get("/years/2026/report.pdf")
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertEqual(preview_response.mimetype, "application/pdf")
+        self.assertTrue(preview_response.data.startswith(b"%PDF-"))
+        self.assertIn(
+            "/years/2026/report.pdf",
+            self.client.get("/year-close").get_data(as_text=True),
+        )
         response = self.client.post(
             "/year-close/2026", data={"csrf_token": self.csrf()}
         )
@@ -660,7 +669,11 @@ class AppTest(unittest.TestCase):
         self.assertEqual(archive_response.status_code, 200)
         with zipfile.ZipFile(io.BytesIO(archive_response.data)) as archive:
             names = set(archive.namelist())
-        self.assertTrue({"buchungen.csv", "pruefbericht.json", "manifest.json"}.issubset(names))
+            report_pdf = archive.read("kassenbericht.pdf")
+            manifest = json.loads(archive.read("manifest.json"))
+        self.assertTrue({"buchungen.csv", "kassenbericht.pdf", "pruefbericht.json", "manifest.json"}.issubset(names))
+        self.assertTrue(report_pdf.startswith(b"%PDF-"))
+        self.assertEqual(manifest["kassenbericht.pdf"]["size"], len(report_pdf))
 
         self.client.post(
             f"/transactions/{transaction_id}/update",
