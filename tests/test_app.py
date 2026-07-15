@@ -686,6 +686,17 @@ class AppTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
 
+    def test_navigation_groups_settings_and_exposes_mobile_toggle(self):
+        response = self.client.get("/accounts")
+        html = response.get_data(as_text=True)
+        self.assertIn('class="nav-toggle"', html)
+        self.assertIn('aria-controls="primary-navigation"', html)
+        self.assertIn('class="primary-navigation"', html)
+        self.assertIn('class="nav-submenu"', html)
+        self.assertIn('class="active">Einstellungen', html)
+        for label in ("Konten &amp; Kasse", "Import", "Kategorien", "Regeln"):
+            self.assertIn(label, html)
+
 
 if __name__ == "__main__":
     unittest.main()
