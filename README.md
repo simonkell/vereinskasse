@@ -18,6 +18,7 @@ kategorisiert und mit digitalen Belegen vervollständigt.
 - Status `Beleg fehlt`, `Vollständig` oder `Kein Beleg erforderlich`
 - Jahresübersicht und CSV-Export
 - Splitbuchungen mit vollständiger Betragskontrolle
+- unveränderliche Storno- und Korrekturketten für manuelle Barkassenbuchungen
 - Jahresabschluss mit Vollständigkeitsprüfung und Änderungssperre
 - eigenständig archivierbares ZIP je abgeschlossenem Jahr mit Buchungen, Belegen,
   Originalimporten, Prüfbericht und SHA-256-Manifest
@@ -160,11 +161,17 @@ alle Belegstatus bearbeitet wurden. Danach sind Importe, Barbuchungen, fachliche
 Änderungen, Splitbuchungen und neue Belege für dieses Jahr gesperrt. Ein bewusstes
 Wiederöffnen bleibt möglich und wird im Prüfprotokoll festgehalten.
 
+Fehlerhafte manuelle Barkassenbuchungen werden nicht gelöscht oder überschrieben.
+Ein Storno erzeugt eine exakt entgegengesetzte Gegenbuchung; eine Korrektur ergänzt
+außerdem eine neue Ersatzbuchung. Alle drei Einträge werden dauerhaft verknüpft,
+im Prüfungslink gekennzeichnet und als `korrekturen.csv` in das Jahresarchiv aufgenommen.
+Importierte Bankbewegungen können nicht in der Software storniert werden, weil sie den
+tatsächlichen Kontoauszug abbilden.
+
 ## Noch nicht enthalten
 
 - direkter FinTS-/HBCI-Abruf
 - mehrere Benutzer und Rollen
-- revisionssichere Korrektur-/Stornobuchungen
 - PDF-Kassenbericht
 - automatische Belegerkennung/OCR
 

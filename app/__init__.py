@@ -115,6 +115,14 @@ def create_app(test_config=None):
         row = db.execute("SELECT booking_date FROM transactions WHERE id=?", (transaction_id,)).fetchone()
         return row is not None and year_is_closed(db, row["booking_date"][:4])
 
+    def transaction_is_adjustment(db, transaction_id):
+        return db.execute(
+            """SELECT 1 FROM transaction_adjustments
+               WHERE original_transaction_id=? OR reversal_transaction_id=?
+                  OR replacement_transaction_id=?""",
+            (transaction_id, transaction_id, transaction_id),
+        ).fetchone() is not None
+
     @app.before_request
     def csrf_protect():
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.endpoint != "login":
@@ -219,6 +227,11 @@ def create_app(test_config=None):
             """
             SELECT t.*, c.name category_name, a.name account_name, a.kind account_kind,
                    (SELECT COUNT(*) FROM transaction_splits s WHERE s.transaction_id=t.id) split_count,
+                   (SELECT kind FROM transaction_adjustments x WHERE x.original_transaction_id=t.id) adjustment_kind,
+                   CASE
+                     WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.reversal_transaction_id=t.id) THEN 'reversal'
+                     WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.replacement_transaction_id=t.id) THEN 'replacement'
+                   END adjustment_role,
                    (SELECT COUNT(*) FROM attachments a WHERE a.transaction_id=t.id) attachment_count
             FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
             LEFT JOIN accounts a ON a.id=t.account_id
@@ -255,6 +268,11 @@ def create_app(test_config=None):
         query = """
             SELECT t.*, c.name category_name, a.name account_name, a.kind account_kind,
                    (SELECT COUNT(*) FROM transaction_splits s WHERE s.transaction_id=t.id) split_count,
+                   (SELECT kind FROM transaction_adjustments x WHERE x.original_transaction_id=t.id) adjustment_kind,
+                   CASE
+                     WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.reversal_transaction_id=t.id) THEN 'reversal'
+                     WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.replacement_transaction_id=t.id) THEN 'replacement'
+                   END adjustment_role,
                    (SELECT COUNT(*) FROM attachments a WHERE a.transaction_id=t.id) attachment_count
             FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
             LEFT JOIN accounts a ON a.id=t.account_id WHERE 1=1
@@ -311,6 +329,18 @@ def create_app(test_config=None):
                JOIN categories c ON c.id=s.category_id WHERE s.transaction_id=? ORDER BY s.id""",
             (transaction_id,),
         ).fetchall()
+        adjustment = db.execute(
+            """SELECT x.*, original.purpose original_purpose,
+                      reversal.amount_cents reversal_amount,
+                      replacement.amount_cents replacement_amount
+               FROM transaction_adjustments x
+               JOIN transactions original ON original.id=x.original_transaction_id
+               JOIN transactions reversal ON reversal.id=x.reversal_transaction_id
+               LEFT JOIN transactions replacement ON replacement.id=x.replacement_transaction_id
+               WHERE x.original_transaction_id=? OR x.reversal_transaction_id=?
+                  OR x.replacement_transaction_id=?""",
+            (transaction_id, transaction_id, transaction_id),
+        ).fetchone()
         return render_template(
             "transaction_detail.html",
             transaction=transaction,
@@ -319,12 +349,18 @@ def create_app(test_config=None):
             splits=splits,
             split_total=sum(row["amount_cents"] for row in splits),
             year_closed=year_is_closed(db, transaction["booking_date"][:4]),
+            adjustment=adjustment,
+            is_adjustment=transaction_is_adjustment(db, transaction_id),
+            today=datetime.now().date().isoformat(),
         )
 
     @app.post("/transactions/<int:transaction_id>/update")
     @login_required
     def transaction_update(transaction_id):
         db = get_db()
+        if transaction_is_adjustment(db, transaction_id):
+            flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
@@ -366,6 +402,9 @@ def create_app(test_config=None):
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
 
         db = get_db()
+        if transaction_is_adjustment(db, transaction_id):
+            flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
@@ -403,6 +442,9 @@ def create_app(test_config=None):
         transaction = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
         if transaction is None:
             abort(404)
+        if transaction_is_adjustment(db, transaction_id):
+            flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         if year_is_closed(db, transaction["booking_date"][:4]):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
@@ -451,6 +493,9 @@ def create_app(test_config=None):
     @login_required
     def transaction_splits_clear(transaction_id):
         db = get_db()
+        if transaction_is_adjustment(db, transaction_id):
+            flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
@@ -459,6 +504,172 @@ def create_app(test_config=None):
         db.commit()
         flash("Aufteilung entfernt; bitte wieder eine Kategorie zuordnen.", "success")
         return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+    @app.post("/transactions/<int:transaction_id>/adjust")
+    @login_required
+    def transaction_adjust(transaction_id):
+        db = get_db()
+        original = db.execute(
+            """SELECT t.*,a.kind account_kind,a.currency account_currency
+               FROM transactions t JOIN accounts a ON a.id=t.account_id
+               WHERE t.id=? AND a.organization_id=?""",
+            (transaction_id, ORGANIZATION_ID),
+        ).fetchone()
+        if original is None:
+            abort(404)
+        if original["account_kind"] != "cash" or original["bank_transaction_code"] != "CASH":
+            flash("Nur manuelle Barkassenbuchungen können in Vereinskasse storniert werden.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if year_is_closed(db, original["booking_date"][:4]):
+            flash("Öffne zuerst das Geschäftsjahr der ursprünglichen Buchung wieder.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if transaction_is_adjustment(db, transaction_id):
+            flash("Diese Buchung wurde bereits storniert oder korrigiert.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+        action = request.form.get("action")
+        reason = request.form.get("reason", "").strip()
+        if action not in {"reverse", "correct"} or len(reason) < 3:
+            flash("Bitte Storno oder Korrektur wählen und einen nachvollziehbaren Grund angeben.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        try:
+            adjustment_date = datetime.fromisoformat(request.form.get("booking_date", "")).date().isoformat()
+        except (TypeError, ValueError):
+            flash("Bitte ein gültiges Buchungsdatum für die Gegenbuchung angeben.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if year_is_closed(db, adjustment_date[:4]):
+            flash("Die Gegenbuchung kann nicht in einem abgeschlossenen Geschäftsjahr liegen.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if adjustment_date[:4] != original["booking_date"][:4]:
+            flash("Original, Gegenbuchung und Ersatzbuchung müssen im selben Geschäftsjahr liegen.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+        original_splits = db.execute(
+            "SELECT category_id,amount_cents,note FROM transaction_splits WHERE transaction_id=? ORDER BY id",
+            (transaction_id,),
+        ).fetchall()
+        replacement_amount = None
+        replacement_purpose = ""
+        replacement_category = None
+        if action == "correct":
+            try:
+                replacement_amount = parse_amount_cents(request.form.get("new_amount"))
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            replacement_purpose = request.form.get("new_purpose", "").strip()
+            replacement_category = request.form.get("new_category_id") or original["category_id"]
+            if replacement_amount == 0 or not replacement_purpose:
+                flash("Für die Korrektur werden ein Betrag ungleich null und ein Verwendungszweck benötigt.", "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            copy_splits = bool(original_splits) and replacement_amount == original["amount_cents"] and not request.form.get("new_category_id")
+            if original_splits and not copy_splits and not request.form.get("new_category_id"):
+                flash("Bei geändertem Betrag einer Splitbuchung muss eine neue Gesamtkategorie gewählt werden.", "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            if not original_splits and not replacement_category:
+                flash("Bitte der korrigierten Buchung eine Kategorie zuordnen.", "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            if replacement_category and db.execute(
+                "SELECT 1 FROM categories WHERE id=? AND active=1", (replacement_category,)
+            ).fetchone() is None:
+                abort(400, "Ungültige Kategorie")
+        else:
+            copy_splits = False
+
+        marker = uuid.uuid4().hex
+        batch = db.execute(
+            """INSERT INTO import_batches(account_id,filename,file_hash,stored_path,account_iban,imported_count)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                original["account_id"],
+                "Storno/Korrektur",
+                f"manual:adjustment:{marker}",
+                "",
+                original["account_iban"],
+                2 if action == "correct" else 1,
+            ),
+        )
+
+        def insert_adjustment(amount, purpose, code, category_id, receipt_status, fingerprint_suffix):
+            cursor = db.execute(
+                """INSERT INTO transactions(
+                   account_id,import_batch_id,fingerprint,account_iban,booking_date,value_date,
+                   amount_cents,currency,counterparty,counterparty_iban,purpose,bank_reference,
+                   bank_transaction_code,category_id,receipt_status,note
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    original["account_id"], batch.lastrowid,
+                    hashlib.sha256(f"adjustment:{marker}:{fingerprint_suffix}".encode()).hexdigest(),
+                    original["account_iban"], adjustment_date, adjustment_date, amount,
+                    original["currency"], original["counterparty"], original["counterparty_iban"],
+                    purpose, f"Buchung #{transaction_id}", code, category_id, receipt_status, reason,
+                ),
+            )
+            return cursor.lastrowid
+
+        reversal_id = insert_adjustment(
+            -original["amount_cents"],
+            f"Storno zu Buchung #{transaction_id}: {original['purpose'] or 'ohne Verwendungszweck'}",
+            "REVERSAL",
+            original["category_id"],
+            "not_required",
+            "reversal",
+        )
+        if original_splits:
+            db.executemany(
+                """INSERT INTO transaction_splits(transaction_id,category_id,amount_cents,note)
+                   VALUES (?,?,?,?)""",
+                [(reversal_id, row["category_id"], -row["amount_cents"], row["note"]) for row in original_splits],
+            )
+
+        replacement_id = None
+        if action == "correct":
+            replacement_id = insert_adjustment(
+                replacement_amount,
+                replacement_purpose,
+                "CORRECTION",
+                None if copy_splits else replacement_category,
+                original["receipt_status"],
+                "replacement",
+            )
+            if copy_splits:
+                db.executemany(
+                    """INSERT INTO transaction_splits(transaction_id,category_id,amount_cents,note)
+                       VALUES (?,?,?,?)""",
+                    [(replacement_id, row["category_id"], row["amount_cents"], row["note"]) for row in original_splits],
+                )
+
+        cursor = db.execute(
+            """INSERT INTO transaction_adjustments(
+               original_transaction_id,reversal_transaction_id,replacement_transaction_id,kind,reason
+               ) VALUES (?,?,?,?,?)""",
+            (transaction_id, reversal_id, replacement_id, "correction" if action == "correct" else "reversal", reason),
+        )
+        log_action(
+            db,
+            "corrected" if action == "correct" else "reversed",
+            "transaction_adjustment",
+            cursor.lastrowid,
+            json.dumps(
+                {
+                    "original": transaction_id,
+                    "reversal": reversal_id,
+                    "replacement": replacement_id,
+                    "reason": reason,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        db.commit()
+        flash(
+            "Korrektur mit Gegen- und Ersatzbuchung erstellt."
+            if action == "correct"
+            else "Stornobuchung erstellt; die ursprüngliche Buchung bleibt erhalten.",
+            "success",
+        )
+        return redirect(
+            url_for("transaction_detail", transaction_id=replacement_id or reversal_id)
+        )
 
     @app.get("/attachments/<int:attachment_id>")
     @login_required
@@ -925,7 +1136,12 @@ def create_app(test_config=None):
                 return redirect(url_for("reviews"))
             rows = db.execute(
                 """SELECT t.*, c.name category_name, c.tax_area,
-                          a.name account_name, a.kind account_kind
+                          a.name account_name, a.kind account_kind,
+                          (SELECT kind FROM transaction_adjustments x WHERE x.original_transaction_id=t.id) adjustment_kind,
+                          CASE
+                            WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.reversal_transaction_id=t.id) THEN 'reversal'
+                            WHEN EXISTS(SELECT 1 FROM transaction_adjustments x WHERE x.replacement_transaction_id=t.id) THEN 'replacement'
+                          END adjustment_role
                    FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
                    LEFT JOIN accounts a ON a.id=t.account_id
                    WHERE substr(t.booking_date,1,4)=?
@@ -1040,7 +1256,7 @@ def create_app(test_config=None):
             "expenses": -sum(row["amount_cents"] for row in transactions if row["amount_cents"] < 0),
             "balance": sum(row["amount_cents"] for row in transactions),
             "missing": sum(row["receipt_status"] == "missing" for row in transactions),
-            "uncategorized": sum(row["category_id"] is None for row in transactions),
+            "uncategorized": sum(row["category_id"] is None and not row.get("splits") for row in transactions),
         }
         return render_template(
             "review_public.html", share=share, snapshot=snapshot, transactions=transactions, totals=totals, token=token
@@ -1147,6 +1363,15 @@ def create_app(test_config=None):
                         (year,),
                     ).fetchall()
                 ],
+                "adjustments": [
+                    dict(row)
+                    for row in db.execute(
+                        """SELECT x.* FROM transaction_adjustments x
+                           JOIN transactions t ON t.id=x.original_transaction_id
+                           WHERE substr(t.booking_date,1,4)=? ORDER BY x.id""",
+                        (year,),
+                    ).fetchall()
+                ],
             }
             summary_hash = hashlib.sha256(
                 json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
@@ -1197,7 +1422,7 @@ def create_app(test_config=None):
             csv_output = io.StringIO()
             writer = csv.writer(csv_output, delimiter=";")
             writer.writerow(
-                ["Buchung", "Konto", "Datum", "Betrag", "Währung", "Gegenpartei", "Zweck", "Kategorie", "Steuerbereich", "Split-Notiz", "Belegstatus"]
+                ["Buchung", "Konto", "Datum", "Betrag", "Währung", "Gegenpartei", "Zweck", "Kategorie", "Steuerbereich", "Split-Notiz", "Belegstatus", "Buchungstyp", "Referenz"]
             )
             for transaction in transactions:
                 splits = db.execute(
@@ -1213,9 +1438,31 @@ def create_app(test_config=None):
                             f"{allocation['amount_cents']/100:.2f}".replace(".", ","), transaction["currency"],
                             transaction["counterparty"], transaction["purpose"], allocation["category_name"],
                             allocation["tax_area"], allocation["note"] if splits else "", transaction["receipt_status"],
+                            transaction["bank_transaction_code"], transaction["bank_reference"],
                         ]
                     )
             add_file(archive, "buchungen.csv", "\ufeff" + csv_output.getvalue())
+            adjustments = db.execute(
+                """SELECT x.* FROM transaction_adjustments x
+                   JOIN transactions t ON t.id=x.original_transaction_id
+                   WHERE substr(t.booking_date,1,4)=? ORDER BY x.id""",
+                (year,),
+            ).fetchall()
+            if adjustments:
+                adjustment_output = io.StringIO()
+                adjustment_writer = csv.writer(adjustment_output, delimiter=";")
+                adjustment_writer.writerow(
+                    ["Korrektur", "Art", "Original", "Gegenbuchung", "Ersatzbuchung", "Grund", "Erstellt"]
+                )
+                for adjustment in adjustments:
+                    adjustment_writer.writerow(
+                        [
+                            adjustment["id"], adjustment["kind"], adjustment["original_transaction_id"],
+                            adjustment["reversal_transaction_id"], adjustment["replacement_transaction_id"] or "",
+                            adjustment["reason"], adjustment["created_at"],
+                        ]
+                    )
+                add_file(archive, "korrekturen.csv", "\ufeff" + adjustment_output.getvalue())
             attachments = db.execute(
                 """SELECT a.*,t.id transaction_id FROM attachments a JOIN transactions t ON t.id=a.transaction_id
                    WHERE substr(t.booking_date,1,4)=? ORDER BY a.id""",
@@ -1245,6 +1492,7 @@ def create_app(test_config=None):
                 "summary_hash": closure["summary_hash"],
                 "transactions": len(transactions),
                 "attachments": len(attachments),
+                "adjustments": len(adjustments),
             }
             add_file(archive, "pruefbericht.json", json.dumps(report, ensure_ascii=False, indent=2))
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode())

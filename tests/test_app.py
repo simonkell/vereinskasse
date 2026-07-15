@@ -182,6 +182,141 @@ class AppTest(unittest.TestCase):
         self.assertEqual(transaction, (account_id, -350, "CASH"))
         self.assertEqual(balance, 650)
 
+    def test_cash_reversal_creates_immutable_counter_booking(self):
+        self.client.post(
+            "/accounts",
+            data={
+                "csrf_token": self.csrf(), "kind": "cash", "name": "Barkasse",
+                "opening_balance": "0,00",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        account_id = connection.execute("SELECT id FROM accounts WHERE kind='cash'").fetchone()[0]
+        category_id = connection.execute("SELECT id FROM categories LIMIT 1").fetchone()[0]
+        connection.close()
+        self.client.post(
+            f"/accounts/{account_id}/cash-entry",
+            data={
+                "csrf_token": self.csrf(), "booking_date": "2026-07-15", "direction": "expense",
+                "amount": "12,50", "purpose": "Porto", "category_id": str(category_id),
+                "receipt_status": "not_required",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        original_id = connection.execute("SELECT id FROM transactions").fetchone()[0]
+        connection.close()
+        response = self.client.post(
+            f"/transactions/{original_id}/adjust",
+            data={
+                "csrf_token": self.csrf(), "action": "reverse", "booking_date": "2026-07-16",
+                "reason": "Buchung doppelt erfasst",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rows = connection.execute(
+            "SELECT id,amount_cents,bank_transaction_code,note FROM transactions ORDER BY id"
+        ).fetchall()
+        adjustment = connection.execute(
+            "SELECT original_transaction_id,reversal_transaction_id,replacement_transaction_id,kind FROM transaction_adjustments"
+        ).fetchone()
+        connection.close()
+        self.assertEqual([row[1] for row in rows], [-1250, 1250])
+        self.assertEqual(rows[1][2:], ("REVERSAL", "Buchung doppelt erfasst"))
+        self.assertEqual(adjustment, (rows[0][0], rows[1][0], None, "reversal"))
+
+        self.client.post(
+            f"/transactions/{original_id}/update",
+            data={
+                "csrf_token": self.csrf(), "category_id": str(category_id),
+                "receipt_status": "not_required", "note": "nachträglich verändert",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        note = connection.execute("SELECT note FROM transactions WHERE id=?", (original_id,)).fetchone()[0]
+        connection.close()
+        self.assertEqual(note, "")
+
+    def test_cash_correction_creates_reversal_and_replacement(self):
+        self.client.post(
+            "/accounts",
+            data={
+                "csrf_token": self.csrf(), "kind": "cash", "name": "Barkasse",
+                "opening_balance": "0,00",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        account_id = connection.execute("SELECT id FROM accounts WHERE kind='cash'").fetchone()[0]
+        category_id = connection.execute("SELECT id FROM categories LIMIT 1").fetchone()[0]
+        connection.close()
+        self.client.post(
+            f"/accounts/{account_id}/cash-entry",
+            data={
+                "csrf_token": self.csrf(), "booking_date": "2026-07-15", "direction": "income",
+                "amount": "10,00", "purpose": "Spende bar", "category_id": str(category_id),
+                "receipt_status": "not_required",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        original_id = connection.execute("SELECT id FROM transactions").fetchone()[0]
+        connection.close()
+        response = self.client.post(
+            f"/transactions/{original_id}/adjust",
+            data={
+                "csrf_token": self.csrf(), "action": "correct", "booking_date": "2026-07-16",
+                "reason": "Zahlendreher im Betrag", "new_amount": "12,50",
+                "new_purpose": "Spende bar korrigiert", "new_category_id": str(category_id),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rows = connection.execute(
+            "SELECT amount_cents,bank_transaction_code,purpose FROM transactions ORDER BY id"
+        ).fetchall()
+        adjustment = connection.execute(
+            "SELECT kind,replacement_transaction_id FROM transaction_adjustments"
+        ).fetchone()
+        connection.close()
+        self.assertEqual([row[0] for row in rows], [1000, -1000, 1250])
+        self.assertEqual(sum(row[0] for row in rows), 1250)
+        self.assertEqual(rows[2][1:], ("CORRECTION", "Spende bar korrigiert"))
+        self.assertEqual(adjustment[0], "correction")
+        self.assertIsNotNone(adjustment[1])
+        journal = self.client.get("/transactions")
+        self.assertIn("Korrektur".encode(), journal.data)
+        detail = self.client.get(f"/transactions/{adjustment[1]}")
+        self.assertIn("unveränderlichen Korrekturkette".encode(), detail.data)
+
+        self.client.post("/year-close/2026", data={"csrf_token": self.csrf()})
+        archive_response = self.client.get("/years/2026/archive.zip")
+        self.assertEqual(archive_response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(archive_response.data)) as archive:
+            self.assertIn("korrekturen.csv", archive.namelist())
+            self.assertIn("Zahlendreher".encode(), archive.read("korrekturen.csv"))
+
+    def test_imported_bank_transaction_cannot_be_stopped_in_software(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "umsatz.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        transaction_id = connection.execute("SELECT id FROM transactions LIMIT 1").fetchone()[0]
+        connection.close()
+        self.client.post(
+            f"/transactions/{transaction_id}/adjust",
+            data={
+                "csrf_token": self.csrf(), "action": "reverse", "booking_date": "2026-07-16",
+                "reason": "darf nicht gehen",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        adjustment_count = connection.execute("SELECT COUNT(*) FROM transaction_adjustments").fetchone()[0]
+        transaction_count = connection.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        connection.close()
+        self.assertEqual(adjustment_count, 0)
+        self.assertEqual(transaction_count, 2)
+
     def test_review_link_is_public_read_only_and_revocable(self):
         self.client.post(
             "/import",

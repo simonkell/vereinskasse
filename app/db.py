@@ -122,6 +122,16 @@ CREATE TABLE IF NOT EXISTS year_closures (
     closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(organization_id, year)
 );
+
+CREATE TABLE IF NOT EXISTS transaction_adjustments (
+    id INTEGER PRIMARY KEY,
+    original_transaction_id INTEGER NOT NULL UNIQUE REFERENCES transactions(id),
+    reversal_transaction_id INTEGER NOT NULL UNIQUE REFERENCES transactions(id),
+    replacement_transaction_id INTEGER UNIQUE REFERENCES transactions(id),
+    kind TEXT NOT NULL CHECK(kind IN ('reversal', 'correction')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -163,6 +173,7 @@ def init_db():
     db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction ON transaction_splits(transaction_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_original ON transaction_adjustments(original_transaction_id)")
     _migrate_existing_accounts(db)
     db.executemany(
         "INSERT OR IGNORE INTO categories(name, tax_area) VALUES (?, ?)",
