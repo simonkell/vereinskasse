@@ -1778,10 +1778,70 @@ def create_app(test_config=None):
                         raise
             return redirect(url_for("categories"))
         rows = db.execute(
-            """SELECT c.*, COUNT(t.id) transaction_count FROM categories c
-               LEFT JOIN transactions t ON t.category_id=c.id GROUP BY c.id ORDER BY c.tax_area,c.name"""
+            """SELECT c.*,
+                      (SELECT COUNT(*) FROM transactions t WHERE t.category_id=c.id)
+                      + (SELECT COUNT(DISTINCT s.transaction_id) FROM transaction_splits s
+                         WHERE s.category_id=c.id) transaction_count,
+                      (SELECT COUNT(*) FROM classification_rules r
+                         WHERE r.category_id=c.id AND r.active=1) rule_count
+               FROM categories c ORDER BY c.active DESC,c.tax_area,c.name"""
         ).fetchall()
         return render_template("categories.html", categories=rows)
+
+    @app.post("/categories/<int:category_id>/update")
+    @login_required
+    def category_update(category_id):
+        db = get_db()
+        category = db.execute(
+            "SELECT * FROM categories WHERE id=?", (category_id,)
+        ).fetchone()
+        if category is None:
+            abort(404)
+        name = request.form.get("name", "").strip()
+        tax_area = request.form.get("tax_area", "")
+        active = request.form.get("active", "1") == "1"
+        if not name or tax_area not in TAX_AREAS:
+            flash("Bitte Name und Steuerbereich vollständig angeben.", "error")
+            return redirect(url_for("categories"))
+        try:
+            db.execute(
+                "UPDATE categories SET name=?,tax_area=?,active=? WHERE id=?",
+                (name, tax_area, int(active), category_id),
+            )
+        except sqlite3.IntegrityError:
+            flash("Eine andere Kategorie verwendet diesen Namen bereits.", "error")
+            return redirect(url_for("categories"))
+        disabled_rules = 0
+        if not active:
+            cursor = db.execute(
+                "UPDATE classification_rules SET active=0 WHERE category_id=? AND active=1",
+                (category_id,),
+            )
+            disabled_rules = cursor.rowcount
+        log_action(
+            db,
+            "updated",
+            "category",
+            category_id,
+            json.dumps(
+                {
+                    "before": {
+                        "name": category["name"],
+                        "tax_area": category["tax_area"],
+                        "active": bool(category["active"]),
+                    },
+                    "after": {"name": name, "tax_area": tax_area, "active": active},
+                    "disabled_rules": disabled_rules,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        db.commit()
+        message = "Kategorie gespeichert."
+        if disabled_rules:
+            message += f" {disabled_rules} zugehörige Regel(n) wurden deaktiviert."
+        flash(message, "success")
+        return redirect(url_for("categories"))
 
     @app.get("/audit")
     @login_required

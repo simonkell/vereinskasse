@@ -1,9 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-head"><div><div class="eyebrow">Kontierung</div><h1>Kategorien</h1></div></div>
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Kontierung</div>
+    <h1>Kategorien</h1>
+    <p class="muted">Kategorien strukturieren die Buchungen und ordnen sie einem steuerlichen Bereich zu.</p>
+  </div>
+</div>
+
 <div class="grid category-grid">
-  <section class="card"><h2>Neue Kategorie</h2><form method="post" class="stack"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="name" required placeholder="z. B. Trainingsmaterial"></label><label>Steuerbereich<select name="tax_area">{% for area in tax_areas %}<option>{{ area }}</option>{% endfor %}</select></label><button class="button primary" type="submit">Kategorie anlegen</button></form></section>
-  <section class="card"><h2>Vorhandene Kategorien</h2><div class="category-list">{% for category in categories %}<div><div><strong>{{ category.name }}</strong><small>{{ category.tax_area }}</small></div><span>{{ category.transaction_count }} Buchungen</span></div>{% endfor %}</div></section>
+  <section class="card">
+    <h2>Neue Kategorie</h2>
+    <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Name<input name="name" required placeholder="z. B. Trainingsmaterial"></label>
+      <label>Steuerbereich<select name="tax_area">{% for area in tax_areas %}<option>{{ area }}</option>{% endfor %}</select></label>
+      <button class="button primary" type="submit">Kategorie anlegen</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Vorhandene Kategorien</h2><p class="muted">Umbenennen, Steuerbereich ändern oder nicht mehr benötigte Kategorien deaktivieren.</p></div>
+    </div>
+    <div class="category-manage-list">
+    {% for category in categories %}
+      <article class="category-manage-item{{ ' is-inactive' if not category.active }}">
+        <div class="category-manage-head">
+          <div>
+            <strong>{{ category.name }}</strong>
+            <small>{{ category.tax_area }} · {{ category.transaction_count }} Buchungen · {{ category.rule_count }} aktive Regeln</small>
+          </div>
+          <span class="badge {{ 'complete' if category.active else 'not_required' }}">{{ 'Aktiv' if category.active else 'Inaktiv' }}</span>
+        </div>
+        <details class="category-editor">
+          <summary>Bearbeiten</summary>
+          <form method="post" action="{{ url_for('category_update', category_id=category.id) }}" class="stack compact-stack">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>Name<input name="name" value="{{ category.name }}" required></label>
+            <div class="form-row two-columns">
+              <label>Steuerbereich<select name="tax_area">{% for area in tax_areas %}<option{{ ' selected' if area == category.tax_area }}>{{ area }}</option>{% endfor %}</select></label>
+              <label>Status<select name="active"><option value="1"{{ ' selected' if category.active }}>Aktiv</option><option value="0"{{ ' selected' if not category.active }}>Inaktiv</option></select></label>
+            </div>
+            <small>Bestehende Buchungen behalten ihre Kategorie. Beim Deaktivieren werden zugehörige Regeln ebenfalls deaktiviert.</small>
+            <button class="button" type="submit">Änderungen speichern</button>
+          </form>
+        </details>
+      </article>
+    {% else %}
+      <div class="empty compact">Noch keine Kategorien vorhanden.</div>
+    {% endfor %}
+    </div>
+  </section>
 </div>
 {% endblock %}
-

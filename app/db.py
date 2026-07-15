@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     tax_area TEXT NOT NULL DEFAULT 'Ideeller Bereich',
+    system_key TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -146,6 +147,7 @@ CREATE TABLE IF NOT EXISTS classification_rules (
     category_id INTEGER NOT NULL REFERENCES categories(id),
     receipt_status TEXT
         CHECK(receipt_status IS NULL OR receipt_status IN ('missing', 'complete', 'not_required')),
+    system_key TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -167,13 +169,18 @@ CREATE TABLE IF NOT EXISTS account_reconciliations (
 
 
 DEFAULT_CATEGORIES = [
-    ("Mitgliedsbeiträge", "Ideeller Bereich"),
-    ("Spenden", "Ideeller Bereich"),
-    ("Verwaltung", "Ideeller Bereich"),
-    ("Versicherungen und Gebühren", "Ideeller Bereich"),
-    ("Veranstaltungen", "Zweckbetrieb"),
-    ("Vermögensverwaltung", "Vermögensverwaltung"),
-    ("Wirtschaftlicher Geschäftsbetrieb", "Wirtschaftlicher Geschäftsbetrieb"),
+    ("membership_fees", "Mitgliedsbeiträge", "Ideeller Bereich"),
+    ("donations", "Spenden", "Ideeller Bereich"),
+    ("administration", "Verwaltung", "Ideeller Bereich"),
+    ("insurance_fees", "Versicherungen und Gebühren", "Ideeller Bereich"),
+    ("events", "Veranstaltungen", "Zweckbetrieb"),
+    ("asset_management", "Vermögensverwaltung", "Vermögensverwaltung"),
+    ("commercial_operations", "Wirtschaftlicher Geschäftsbetrieb", "Wirtschaftlicher Geschäftsbetrieb"),
+]
+
+DEFAULT_RULES = [
+    ("membership_contribution", "Beiträge erkennen", "income", "Beitrag", "membership_fees"),
+    ("bank_fees", "Kontokosten erkennen", "expense", "Kontokosten", "asset_management"),
 ]
 
 
@@ -202,17 +209,19 @@ def init_db():
     _ensure_column(db, "import_batches", "account_id", "INTEGER REFERENCES accounts(id)")
     _ensure_column(db, "transactions", "account_id", "INTEGER REFERENCES accounts(id)")
     _ensure_column(db, "accounts", "opening_balance_source", "TEXT NOT NULL DEFAULT 'legacy'")
+    _ensure_column(db, "categories", "system_key", "TEXT")
+    _ensure_column(db, "classification_rules", "system_key", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction ON transaction_splits(transaction_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_original ON transaction_adjustments(original_transaction_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_classification_rules_account ON classification_rules(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_account_reconciliations_account_date ON account_reconciliations(account_id,balance_date)")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_system_key ON categories(system_key) WHERE system_key IS NOT NULL")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_system_key ON classification_rules(system_key) WHERE system_key IS NOT NULL")
     _migrate_existing_accounts(db)
-    db.executemany(
-        "INSERT OR IGNORE INTO categories(name, tax_area) VALUES (?, ?)",
-        DEFAULT_CATEGORIES,
-    )
+    _seed_default_categories(db)
+    _seed_default_rules(db)
     db.commit()
 
 
@@ -220,6 +229,52 @@ def _ensure_column(db, table, column, definition):
     columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _seed_default_categories(db):
+    for system_key, name, tax_area in DEFAULT_CATEGORIES:
+        existing = db.execute(
+            "SELECT id FROM categories WHERE system_key=?", (system_key,)
+        ).fetchone()
+        if existing:
+            continue
+        existing = db.execute("SELECT id FROM categories WHERE name=?", (name,)).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE categories SET system_key=? WHERE id=?",
+                (system_key, existing["id"]),
+            )
+        else:
+            db.execute(
+                "INSERT INTO categories(name,tax_area,system_key) VALUES (?,?,?)",
+                (name, tax_area, system_key),
+            )
+
+
+def _seed_default_rules(db):
+    for system_key, name, direction, purpose_contains, category_key in DEFAULT_RULES:
+        if db.execute(
+            "SELECT 1 FROM classification_rules WHERE system_key=?", (system_key,)
+        ).fetchone():
+            continue
+        existing = db.execute(
+            "SELECT id FROM classification_rules WHERE name=?", (name,)
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE classification_rules SET system_key=? WHERE id=?",
+                (system_key, existing["id"]),
+            )
+            continue
+        category = db.execute(
+            "SELECT id FROM categories WHERE system_key=?", (category_key,)
+        ).fetchone()
+        db.execute(
+            """INSERT INTO classification_rules(
+                   name,direction,purpose_contains,category_id,system_key
+               ) VALUES (?,?,?,?,?)""",
+            (name, direction, purpose_contains, category["id"], system_key),
+        )
 
 
 def _migrate_existing_accounts(db):

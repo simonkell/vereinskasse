@@ -315,6 +315,10 @@ class AppTest(unittest.TestCase):
         self.assertIn("Abgeglichen".encode(), page.data)
 
     def test_rules_preview_and_controlled_application(self):
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        connection.execute("UPDATE classification_rules SET active=0")
+        connection.commit()
+        connection.close()
         self.client.post(
             "/import",
             data={
@@ -341,7 +345,9 @@ class AppTest(unittest.TestCase):
         journal = self.client.get("/transactions")
         self.assertIn("Vorschlag: Beiträge".encode(), journal.data)
         connection = sqlite3.connect(self.app.config["DATABASE"])
-        rule_id = connection.execute("SELECT id FROM classification_rules").fetchone()[0]
+        rule_id = connection.execute(
+            "SELECT id FROM classification_rules WHERE name='Beiträge'"
+        ).fetchone()[0]
         connection.close()
         self.client.post(
             f"/rules/{rule_id}/apply", data={"csrf_token": self.csrf()}
@@ -353,6 +359,95 @@ class AppTest(unittest.TestCase):
         connection.close()
         self.assertEqual(rows[0], (2500, category_id, "not_required"))
         self.assertIsNone(rows[1][1])
+
+    def test_default_rules_are_seeded_once(self):
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        rows = connection.execute(
+            """SELECT r.system_key,r.name,r.direction,r.purpose_contains,c.system_key
+               FROM classification_rules r JOIN categories c ON c.id=r.category_id
+               WHERE r.system_key IS NOT NULL ORDER BY r.system_key"""
+        ).fetchall()
+        connection.close()
+        self.assertEqual(
+            rows,
+            [
+                ("bank_fees", "Kontokosten erkennen", "expense", "Kontokosten", "asset_management"),
+                ("membership_contribution", "Beiträge erkennen", "income", "Beitrag", "membership_fees"),
+            ],
+        )
+        create_app(
+            {
+                "TESTING": True,
+                "SECRET_KEY": "test-secret",
+                "ADMIN_PASSWORD": "test-password",
+                "DATA_DIR": Path(self.temp.name),
+                "DATABASE": self.app.config["DATABASE"],
+            }
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        count = connection.execute(
+            "SELECT COUNT(*) FROM classification_rules WHERE system_key IS NOT NULL"
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(count, 2)
+
+    def test_categories_can_be_renamed_and_deactivated(self):
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        membership_id = connection.execute(
+            "SELECT id FROM categories WHERE system_key='membership_fees'"
+        ).fetchone()[0]
+        asset_id = connection.execute(
+            "SELECT id FROM categories WHERE system_key='asset_management'"
+        ).fetchone()[0]
+        connection.close()
+        response = self.client.post(
+            f"/categories/{membership_id}/update",
+            data={
+                "csrf_token": self.csrf(),
+                "name": "Beiträge und Förderbeiträge",
+                "tax_area": "Ideeller Bereich",
+                "active": "1",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        create_app(
+            {
+                "TESTING": True,
+                "SECRET_KEY": "test-secret",
+                "ADMIN_PASSWORD": "test-password",
+                "DATA_DIR": Path(self.temp.name),
+                "DATABASE": self.app.config["DATABASE"],
+            }
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        membership = connection.execute(
+            "SELECT name FROM categories WHERE system_key='membership_fees'"
+        ).fetchone()[0]
+        duplicate = connection.execute(
+            "SELECT COUNT(*) FROM categories WHERE name='Mitgliedsbeiträge'"
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(membership, "Beiträge und Förderbeiträge")
+        self.assertEqual(duplicate, 0)
+        self.client.post(
+            f"/categories/{asset_id}/update",
+            data={
+                "csrf_token": self.csrf(),
+                "name": "Vermögensverwaltung",
+                "tax_area": "Vermögensverwaltung",
+                "active": "0",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        active, rule_active = connection.execute(
+            """SELECT c.active,r.active FROM categories c
+               JOIN classification_rules r ON r.category_id=c.id
+               WHERE c.id=? AND r.system_key='bank_fees'""",
+            (asset_id,),
+        ).fetchone()
+        connection.close()
+        self.assertEqual((active, rule_active), (0, 0))
+        self.assertIn("Inaktiv".encode(), self.client.get("/categories").data)
 
     def test_bulk_update_changes_selected_transactions(self):
         self.client.post(

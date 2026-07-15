@@ -13,8 +13,8 @@ kategorisiert und mit digitalen Belegen vervollständigt.
 - Barbuchungen im gemeinsamen Buchungsjournal
 - unveränderte Archivierung der importierten Originaldatei inklusive SHA-256-Prüfsumme
 - Buchungsjournal mit Jahres- und Prüfstatusfilter
-- Kategorien und Zuordnung zu den vier steuerlichen Bereichen eines gemeinnützigen Vereins
-- kontrollierte Zuordnungsregeln mit Treffervorschau sowie Stapelbearbeitung
+- bearbeitbare und deaktivierbare Kategorien mit Zuordnung zu den vier steuerlichen Bereichen
+- kontrollierte Zuordnungsregeln mit Treffervorschau, sinnvollen Startregeln und Stapelbearbeitung
 - CAMT-Eröffnungs- und Schlusssalden mit sichtbarem Kontenabgleich
 - Zählbestände und Abweichungsprüfung für die Barkasse
 - mehrere PDF- oder gängige Bildbelege je Buchung
