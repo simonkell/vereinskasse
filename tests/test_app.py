@@ -1,4 +1,5 @@
 import io
+import html
 import json
 import re
 import sqlite3
@@ -6,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from app import create_app
 from app.camt import _fingerprint
@@ -472,6 +474,53 @@ class AppTest(unittest.TestCase):
         ).fetchall()
         connection.close()
         self.assertEqual(rows, [(category_id, "not_required"), (category_id, "not_required")])
+
+    def test_transaction_filter_survives_detail_update(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "camt.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        transaction_id, account_id, booking_date = connection.execute(
+            "SELECT id,account_id,booking_date FROM transactions ORDER BY id LIMIT 1"
+        ).fetchone()
+        connection.close()
+        return_to = (
+            f"/transactions?account_id={account_id}&year={booking_date[:4]}&status=missing"
+        )
+
+        journal = self.client.get(return_to).get_data(as_text=True)
+        detail_url = html.unescape(re.search(r'data-href="([^"]+)"', journal).group(1))
+        self.assertEqual(parse_qs(urlsplit(detail_url).query)["return_to"], [return_to])
+
+        detail = self.client.get(detail_url).get_data(as_text=True)
+        self.assertIn(f'href="{html.escape(return_to, quote=True)}"', detail)
+        self.assertGreaterEqual(
+            detail.count(f'name="return_to" value="{html.escape(return_to, quote=True)}"'),
+            4,
+        )
+
+        response = self.client.post(
+            f"/transactions/{transaction_id}/update",
+            data={
+                "csrf_token": self.csrf(),
+                "category_id": "",
+                "receipt_status": "missing",
+                "note": "Filter bleibt erhalten",
+                "return_to": return_to,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        redirected = urlsplit(response.headers["Location"])
+        self.assertEqual(parse_qs(redirected.query)["return_to"], [return_to])
+        saved_detail = self.client.get(response.headers["Location"]).get_data(as_text=True)
+        self.assertIn(f'href="{html.escape(return_to, quote=True)}"', saved_detail)
+
+        unsafe = self.client.get(
+            f"/transactions/{transaction_id}?return_to=https://example.invalid"
+        ).get_data(as_text=True)
+        self.assertIn('href="/transactions"', unsafe)
 
     def test_camera_upload_replace_and_delete_receipt(self):
         self.client.post(

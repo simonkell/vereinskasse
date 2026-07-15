@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 from flask import (
     Flask,
@@ -310,6 +311,27 @@ def create_app(test_config=None):
 
         return wrapped
 
+    def transactions_return_url(value=None):
+        """Keep only supported list filters in an internal transactions URL."""
+        parsed = urlsplit((value or "").strip())
+        if parsed.scheme or parsed.netloc or parsed.path != url_for("transactions"):
+            return url_for("transactions")
+        filters = {}
+        for key, item in parse_qsl(parsed.query, keep_blank_values=False):
+            if key in {"account_id", "year", "status"} and item:
+                filters[key] = item
+        return url_for("transactions", **filters)
+
+    def transaction_detail_redirect(transaction_id):
+        return_to = transactions_return_url(request.form.get("return_to"))
+        return redirect(
+            url_for(
+                "transaction_detail",
+                transaction_id=transaction_id,
+                return_to=return_to,
+            )
+        )
+
     def year_is_closed(db, year):
         return db.execute(
             "SELECT 1 FROM year_closures WHERE organization_id=? AND year=?",
@@ -527,6 +549,15 @@ def create_app(test_config=None):
             suggestion = next((rule for rule in rules if rule_matches(rule, row)), None)
             if suggestion is not None:
                 suggestions[row["id"]] = suggestion
+        filter_params = {
+            key: value
+            for key, value in {
+                "account_id": account_id,
+                "year": year,
+                "status": status,
+            }.items()
+            if value
+        }
         return render_template(
             "transactions.html",
             transactions=rows,
@@ -537,12 +568,14 @@ def create_app(test_config=None):
             account_id=account_id,
             categories=categories,
             suggestions=suggestions,
+            return_to=url_for("transactions", **filter_params),
         )
 
     @app.get("/transactions/<int:transaction_id>")
     @login_required
     def transaction_detail(transaction_id):
         db = get_db()
+        return_to = transactions_return_url(request.args.get("return_to"))
         transaction = db.execute(
             """SELECT t.*, c.name category_name, c.tax_area,
                       a.name account_name, a.kind account_kind
@@ -584,6 +617,7 @@ def create_app(test_config=None):
             adjustment=adjustment,
             is_adjustment=transaction_is_adjustment(db, transaction_id),
             today=datetime.now().date().isoformat(),
+            return_to=return_to,
         )
 
     @app.post("/transactions/<int:transaction_id>/update")
@@ -592,10 +626,10 @@ def create_app(test_config=None):
         db = get_db()
         if transaction_is_adjustment(db, transaction_id):
             flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         category_id = request.form.get("category_id") or None
         status = request.form.get("receipt_status", "missing")
         if status not in {"missing", "complete", "not_required"}:
@@ -604,7 +638,7 @@ def create_app(test_config=None):
             "SELECT 1 FROM transaction_splits WHERE transaction_id=?", (transaction_id,)
         ).fetchone():
             flash("Entferne zuerst die Splitbuchung, bevor du eine Gesamtkategorie zuordnest.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         db.execute(
             """UPDATE transactions SET category_id=?, receipt_status=?, note=?, updated_at=CURRENT_TIMESTAMP
                WHERE id=?""",
@@ -619,7 +653,7 @@ def create_app(test_config=None):
         )
         db.commit()
         flash("Buchung gespeichert.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.post("/transactions/bulk-update")
     @login_required
@@ -695,8 +729,7 @@ def create_app(test_config=None):
         if skipped:
             message += f" {skipped} gesperrte oder aufgeteilte Buchungen übersprungen."
         flash(message, "success")
-        target = request.form.get("return_to", "")
-        return redirect(target if target.startswith("/transactions") else url_for("transactions"))
+        return redirect(transactions_return_url(request.form.get("return_to")))
 
     @app.post("/transactions/<int:transaction_id>/attachments")
     @login_required
@@ -704,19 +737,19 @@ def create_app(test_config=None):
         upload = request.files.get("attachment") or request.files.get("camera")
         if not upload or not upload.filename:
             flash("Bitte eine Datei auswählen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         extension = upload_extension(upload)
         if extension not in ALLOWED_EXTENSIONS:
             flash("Erlaubt sind PDF- und gängige Bilddateien.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
 
         db = get_db()
         if transaction_is_adjustment(db, transaction_id):
             flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if db.execute("SELECT 1 FROM transactions WHERE id=?", (transaction_id,)).fetchone() is None:
             abort(404)
         storage_name = f"{uuid.uuid4().hex}.{extension}"
@@ -742,7 +775,7 @@ def create_app(test_config=None):
         log_action(db, "uploaded", "attachment", transaction_id, upload.filename)
         db.commit()
         flash("Beleg hochgeladen.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.post("/transactions/<int:transaction_id>/splits")
     @login_required
@@ -753,10 +786,10 @@ def create_app(test_config=None):
             abort(404)
         if transaction_is_adjustment(db, transaction_id):
             flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if year_is_closed(db, transaction["booking_date"][:4]):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         category_ids = request.form.getlist("split_category_id")
         amounts = request.form.getlist("split_amount")
         notes = request.form.getlist("split_note")
@@ -770,19 +803,19 @@ def create_app(test_config=None):
                 category_id_int = int(category_id)
             except (ValueError, TypeError):
                 flash("Bitte jede Aufteilungszeile vollständig ausfüllen.", "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             if cents == 0:
                 flash("Aufteilungsbeträge müssen größer als null sein.", "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             if db.execute("SELECT 1 FROM categories WHERE id=? AND active=1", (category_id_int,)).fetchone() is None:
                 abort(400)
             parsed.append((category_id_int, cents, note.strip()))
         if len(parsed) < 2:
             flash("Eine Splitbuchung benötigt mindestens zwei Aufteilungszeilen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if sum(item[1] for item in parsed) != transaction["amount_cents"]:
             flash("Die Aufteilung muss exakt dem Buchungsbetrag entsprechen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         db.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (transaction_id,))
         db.executemany(
             """INSERT INTO transaction_splits(transaction_id,category_id,amount_cents,note)
@@ -796,7 +829,7 @@ def create_app(test_config=None):
         log_action(db, "split", "transaction", transaction_id, json.dumps(parsed))
         db.commit()
         flash("Buchung vollständig aufgeteilt.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.post("/transactions/<int:transaction_id>/splits/clear")
     @login_required
@@ -804,15 +837,15 @@ def create_app(test_config=None):
         db = get_db()
         if transaction_is_adjustment(db, transaction_id):
             flash("Storno- und Korrekturbuchungen sind unveränderlich.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if transaction_is_closed(db, transaction_id):
             flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         db.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (transaction_id,))
         log_action(db, "unsplit", "transaction", transaction_id)
         db.commit()
         flash("Aufteilung entfernt; bitte wieder eine Kategorie zuordnen.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.post("/transactions/<int:transaction_id>/adjust")
     @login_required
@@ -828,30 +861,30 @@ def create_app(test_config=None):
             abort(404)
         if original["account_kind"] != "cash" or original["bank_transaction_code"] != "CASH":
             flash("Nur manuelle Barkassenbuchungen können in Vereinskasse storniert werden.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if year_is_closed(db, original["booking_date"][:4]):
             flash("Öffne zuerst das Geschäftsjahr der ursprünglichen Buchung wieder.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if transaction_is_adjustment(db, transaction_id):
             flash("Diese Buchung wurde bereits storniert oder korrigiert.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
 
         action = request.form.get("action")
         reason = request.form.get("reason", "").strip()
         if action not in {"reverse", "correct"} or len(reason) < 3:
             flash("Bitte Storno oder Korrektur wählen und einen nachvollziehbaren Grund angeben.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         try:
             adjustment_date = datetime.fromisoformat(request.form.get("booking_date", "")).date().isoformat()
         except (TypeError, ValueError):
             flash("Bitte ein gültiges Buchungsdatum für die Gegenbuchung angeben.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if year_is_closed(db, adjustment_date[:4]):
             flash("Die Gegenbuchung kann nicht in einem abgeschlossenen Geschäftsjahr liegen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if adjustment_date[:4] != original["booking_date"][:4]:
             flash("Original, Gegenbuchung und Ersatzbuchung müssen im selben Geschäftsjahr liegen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
 
         original_splits = db.execute(
             "SELECT category_id,amount_cents,note FROM transaction_splits WHERE transaction_id=? ORDER BY id",
@@ -865,19 +898,19 @@ def create_app(test_config=None):
                 replacement_amount = parse_amount_cents(request.form.get("new_amount"))
             except ValueError as exc:
                 flash(str(exc), "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             replacement_purpose = request.form.get("new_purpose", "").strip()
             replacement_category = request.form.get("new_category_id") or original["category_id"]
             if replacement_amount == 0 or not replacement_purpose:
                 flash("Für die Korrektur werden ein Betrag ungleich null und ein Verwendungszweck benötigt.", "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             copy_splits = bool(original_splits) and replacement_amount == original["amount_cents"] and not request.form.get("new_category_id")
             if original_splits and not copy_splits and not request.form.get("new_category_id"):
                 flash("Bei geändertem Betrag einer Splitbuchung muss eine neue Gesamtkategorie gewählt werden.", "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             if not original_splits and not replacement_category:
                 flash("Bitte der korrigierten Buchung eine Kategorie zuordnen.", "error")
-                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+                return transaction_detail_redirect(transaction_id)
             if replacement_category and db.execute(
                 "SELECT 1 FROM categories WHERE id=? AND active=1", (replacement_category,)
             ).fetchone() is None:
@@ -976,9 +1009,7 @@ def create_app(test_config=None):
             else "Stornobuchung erstellt; die ursprüngliche Buchung bleibt erhalten.",
             "success",
         )
-        return redirect(
-            url_for("transaction_detail", transaction_id=replacement_id or reversal_id)
-        )
+        return transaction_detail_redirect(replacement_id or reversal_id)
 
     @app.get("/attachments/<int:attachment_id>")
     @login_required
@@ -1004,16 +1035,16 @@ def create_app(test_config=None):
         upload = request.files.get("replacement")
         if not upload or not upload.filename:
             flash("Bitte eine Ersatzdatei auswählen.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         extension = upload_extension(upload)
         if extension not in ALLOWED_EXTENSIONS:
             flash("Erlaubt sind PDF- und gängige Bilddateien.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         if transaction_is_adjustment(db, transaction_id) or year_is_closed(
             db, attachment["booking_date"][:4]
         ):
             flash("Der Beleg ist durch Abschluss oder Korrekturkette gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         storage_name = f"{uuid.uuid4().hex}.{extension}"
         target = Path(app.config["DATA_DIR"]) / "attachments" / storage_name
         upload.save(target)
@@ -1044,7 +1075,7 @@ def create_app(test_config=None):
         db.commit()
         old_path.unlink(missing_ok=True)
         flash("Beleg ersetzt.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.post("/attachments/<int:attachment_id>/delete")
     @login_required
@@ -1062,7 +1093,7 @@ def create_app(test_config=None):
             db, attachment["booking_date"][:4]
         ):
             flash("Der Beleg ist durch Abschluss oder Korrekturkette gesperrt.", "error")
-            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            return transaction_detail_redirect(transaction_id)
         db.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
         remaining = db.execute(
             "SELECT COUNT(*) FROM attachments WHERE transaction_id=?", (transaction_id,)
@@ -1079,7 +1110,7 @@ def create_app(test_config=None):
         db.commit()
         (Path(app.config["DATA_DIR"]) / attachment["stored_path"]).unlink(missing_ok=True)
         flash("Beleg gelöscht.", "success")
-        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        return transaction_detail_redirect(transaction_id)
 
     @app.route("/accounts", methods=["GET", "POST"])
     @login_required
