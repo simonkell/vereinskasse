@@ -689,6 +689,7 @@ class AppTest(unittest.TestCase):
     def test_navigation_groups_settings_and_exposes_mobile_toggle(self):
         response = self.client.get("/accounts")
         html = response.get_data(as_text=True)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertIn('class="nav-toggle"', html)
         self.assertIn('aria-controls="primary-navigation"', html)
         self.assertIn('class="primary-navigation"', html)
@@ -698,6 +699,8 @@ class AppTest(unittest.TestCase):
         self.assertIn('class="nav-close"', html)
         for label in ("Konten &amp; Kasse", "Import", "Kategorien", "Regeln"):
             self.assertIn(label, html)
+        for filename in ("app.css", "product.css", "app.js"):
+            self.assertRegex(html, rf'/static/{re.escape(filename)}\?v=[0-9a-f]{{12}}')
 
 
 if __name__ == "__main__":

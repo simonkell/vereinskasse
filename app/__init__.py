@@ -266,6 +266,11 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
+    static_versions = {}
+    for filename in ("app.css", "product.css", "app.js"):
+        path = Path(app.static_folder) / filename
+        static_versions[filename] = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+
     for folder in ("imports", "attachments"):
         (Path(app.config["DATA_DIR"]) / folder).mkdir(parents=True, exist_ok=True)
     app.teardown_appcontext(close_db)
@@ -286,6 +291,14 @@ def create_app(test_config=None):
             return datetime.fromisoformat(value).strftime("%d.%m.%Y")
         except (TypeError, ValueError):
             return value or ""
+
+    @app.template_global()
+    def static_asset(filename):
+        return url_for(
+            "static",
+            filename=filename,
+            v=static_versions.get(filename, "dev"),
+        )
 
     def login_required(view):
         @wraps(view)
@@ -327,6 +340,8 @@ def create_app(test_config=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if response.mimetype == "text/html":
+            response.headers["Cache-Control"] = "no-store"
         if request.endpoint in {"review_public", "review_attachment"}:
             response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
             response.headers["Cache-Control"] = "private, no-store"
