@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS import_batches (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS csv_import_profiles (
+    id INTEGER PRIMARY KEY,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id),
+    name TEXT NOT NULL,
+    header_signature TEXT NOT NULL,
+    mapping_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(organization_id, header_signature)
+);
+
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -213,6 +224,7 @@ def init_db():
     _ensure_column(db, "classification_rules", "system_key", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_csv_import_profiles_organization ON csv_import_profiles(organization_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction ON transaction_splits(transaction_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_original ON transaction_adjustments(original_transaction_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_classification_rules_account ON classification_rules(account_id)")

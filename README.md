@@ -6,8 +6,8 @@ kategorisiert und mit digitalen Belegen vervollständigt.
 
 ## Funktionsumfang
 
-- CAMT.052/CAMT.053- und MT940-Import mit Duplikaterkennung
-- frei zuordenbarer CSV-Import mit Vorschau und automatischer Spaltenerkennung
+- CAMT.052/CAMT.053-Import als XML oder Bank-ZIP sowie MT940-Import mit Duplikaterkennung
+- frei zuordenbarer CSV-Import mit Vorschau, automatischer Spaltenerkennung und wiederverwendbaren Bankprofilen
 - bis zu drei Bankkonten und eine manuell geführte Barkasse
 - Anfangsbestand und laufender Saldo je Konto
 - Barbuchungen im gemeinsamen Buchungsjournal

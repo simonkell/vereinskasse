@@ -8,15 +8,21 @@
   <meta property="og:title" content="Vereinskasse – endlich raus aus Excel">
   <meta property="og:description" content="Die einfache Kassenverwaltung für kleine Vereine. Für 19 Euro im Jahr im Gründerprogramm.">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="https://simonkell.github.io/vereinskasse/">
+  <meta property="og:site_name" content="Vereinskasse">
+  <meta property="og:locale" content="de_DE">
+  <meta name="twitter:card" content="summary">
   <title>Vereinskasse – einfache Kassenverwaltung für kleine Vereine</title>
+  <link rel="canonical" href="https://simonkell.github.io/vereinskasse/">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Vereinskasse","url":"https://simonkell.github.io/vereinskasse/","applicationCategory":"FinanceApplication","operatingSystem":"Web, Docker","description":"Einfache Kassenverwaltung für kleine Vereine mit Bankimport, digitaler Belegablage und Kassenprüfung.","offers":{"@type":"Offer","price":"19","priceCurrency":"EUR"},"codeRepository":"https://github.com/simonkell/vereinskasse","license":"https://opensource.org/license/mit"}</script>
 </head>
 <body>
   <a class="skip-link" href="#main">Zum Inhalt</a>
   <header class="site-header">
     <a class="brand" href="#top" aria-label="Vereinskasse Startseite"><span class="brand-mark" aria-hidden="true">V</span><span>Vereinskasse</span></a>
-    <nav aria-label="Hauptnavigation"><a href="#so-gehts">So geht's</a><a href="#funktionen">Funktionen</a><a href="#preis">Preis</a><a class="nav-cta" href="#pilot">Pilotverein werden</a></nav>
+    <nav aria-label="Hauptnavigation"><a href="#so-gehts">So geht's</a><a href="#funktionen">Funktionen</a><a href="banken.html">Banken &amp; Formate</a><a href="#preis">Preis</a><a class="nav-cta" href="#pilot">Pilotverein werden</a></nav>
   </header>
 
   <main id="main">
@@ -56,7 +62,7 @@
     <section class="section workflow" id="so-gehts">
       <div class="section-heading"><p class="eyebrow">Einfacher Ablauf</p><h2>Vom Kontoauszug zur fertigen Kassenprüfung.</h2><p>Die Bank liefert die Buchungen. Du ergänzt nur noch das, was wirklich fehlt.</p></div>
       <div class="steps">
-        <article><span class="step-number">01</span><div class="step-icon">⇩</div><h3>Umsätze einlesen</h3><p>CAMT-Datei aus dem Onlinebanking hochladen. Doppelte Buchungen erkennt Vereinskasse automatisch.</p></article>
+        <article><span class="step-number">01</span><div class="step-icon">⇩</div><h3>Umsätze einlesen</h3><p>CAMT, MT940, ZIP oder CSV aus dem Onlinebanking hochladen. Doppelte Buchungen erkennt Vereinskasse automatisch.</p></article>
         <article><span class="step-number">02</span><div class="step-icon">⌁</div><h3>Belege zuordnen</h3><p>PDF auswählen oder den Beleg direkt mit dem Smartphone fotografieren und an die Buchung hängen.</p></article>
         <article><span class="step-number">03</span><div class="step-icon">✓</div><h3>Prüfung freigeben</h3><p>Jahr abschließen und einen zeitlich begrenzten Nur-Lese-Link für die Kassenprüfer erstellen.</p></article>
       </div>
@@ -95,7 +101,7 @@
       <div class="section-heading compact"><p class="eyebrow">Kurz beantwortet</p><h2>Häufige Fragen</h2></div>
       <div class="faq-list">
         <details><summary>Ersetzt Vereinskasse eine Steuerberatung?<span>+</span></summary><p>Nein. Die Anwendung hilft bei Ablage, Übersicht und Prüfung. Steuerliche Fragen und besondere Buchführungspflichten gehören weiterhin in fachkundige Hände.</p></details>
-        <details><summary>Welche Bankdateien kann ich importieren?<span>+</span></summary><p>Unterstützt werden CAMT.052, CAMT.053 und MT940. CSV-Dateien lassen sich über eine Vorschau flexibel den benötigten Spalten zuordnen.</p></details>
+        <details><summary>Welche Bankdateien kann ich importieren?<span>+</span></summary><p>Unterstützt werden CAMT.052, CAMT.053 und MT940. CAMT-Exporte können auch als ZIP hochgeladen werden. CSV-Dateien lassen sich flexibel zuordnen; die Zuordnung wird für spätere Importe gespeichert. Eine Übersicht findest du unter <a href="banken.html">Banken und Dateiformate</a>.</p></details>
         <details><summary>Kann ich meine Daten wieder mitnehmen?<span>+</span></summary><p>Ja. Buchungen lassen sich exportieren; abgeschlossene Jahre stehen als ZIP mit Buchungen, Belegen, Originalimporten und Prüfmanifest bereit.</p></details>
         <details><summary>Warum ist die Software Open Source?<span>+</span></summary><p>Vereine können die Software selbst hosten und den Quellcode prüfen. Das kostenpflichtige Angebot übernimmt Hosting, Updates und Betrieb.</p></details>
       </div>
@@ -104,6 +110,6 @@
     <section class="pilot" id="pilot"><div><p class="eyebrow">Pilotverein werden</p><h2>Passt Vereinskasse zu eurem Alltag?</h2><p>Schreib kurz, wie groß euer Verein ist, wie ihr die Kasse heute führt und welche Bankdatei ihr exportieren könnt. Wir melden uns persönlich.</p></div><div class="pilot-action"><a class="button button-light" href="mailto:admin@kell-it.de?subject=Interesse%20am%20Vereinskasse-Gr%C3%BCnderprogramm&body=Vereinsart%3A%0AMitgliederzahl%3A%0AUnsere%20Kasse%20f%C3%BChren%20wir%20aktuell%20mit%3A%0AUnsere%20Bank%20bietet%20diese%20Exportformate%3A%0AWas%20uns%20am%20meisten%20nervt%3A%0A">Unverbindlich vormerken</a><small>Antwort per E-Mail · keine automatische Werbeserie</small></div></section>
   </main>
 
-  <footer><a class="brand footer-brand" href="#top"><span class="brand-mark">V</span><span>Vereinskasse</span></a><p>Die einfache Kassenverwaltung für kleine Vereine.</p><div class="footer-links"><a href="https://github.com/simonkell/vereinskasse">GitHub</a><a href="datenschutz.html">Datenschutz</a><a href="impressum.html">Impressum</a></div></footer>
+  <footer><a class="brand footer-brand" href="#top"><span class="brand-mark">V</span><span>Vereinskasse</span></a><p>Die einfache Kassenverwaltung für kleine Vereine.</p><div class="footer-links"><a href="banken.html">Banken &amp; Formate</a><a href="https://github.com/simonkell/vereinskasse">GitHub</a><a href="datenschutz.html">Datenschutz</a><a href="impressum.html">Impressum</a></div></footer>
 </body>
 </html>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import re
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ class CsvPreview:
     delimiter: str
     encoding: str
     detected: dict[str, str]
+    signature: str
 
 
 def _decode(path: str | Path) -> tuple[str, str]:
@@ -62,6 +64,11 @@ def _normalized(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def header_signature(headers: list[str]) -> str:
+    normalized = "\x1f".join(_normalized(header) for header in headers)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def preview_csv(path: str | Path) -> CsvPreview:
     text, encoding = _decode(path)
     delimiter = _delimiter(text)
@@ -83,6 +90,7 @@ def preview_csv(path: str | Path) -> CsvPreview:
         delimiter=delimiter,
         encoding=encoding,
         detected=detected,
+        signature=header_signature(headers),
     )
 
 

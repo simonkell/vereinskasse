@@ -27,6 +27,13 @@ CAMT = """<?xml version="1.0" encoding="UTF-8"?>
   </Rpt></BkToCstmrAcctRpt>
 </Document>"""
 
+CAMT_053_001_02 = (
+    CAMT.replace("camt.052.001.08", "camt.053.001.02")
+    .replace("BkToCstmrAcctRpt", "BkToCstmrStmt")
+    .replace("<Rpt>", "<Stmt>")
+    .replace("</Rpt>", "</Stmt>")
+)
+
 
 CAMT_NESTED_PARTIES = """<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
@@ -86,6 +93,16 @@ class CamtParserTest(unittest.TestCase):
             first = parse_camt(path)
             second = parse_camt(path)
         self.assertEqual(first.transactions[0].fingerprint, second.transactions[0].fingerprint)
+
+    def test_parses_camt_053_001_02(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "statement.xml"
+            path.write_text(CAMT_053_001_02, encoding="utf-8")
+            report = parse_camt(path)
+
+        self.assertEqual(report.account_iban, "DE02120300000000202051")
+        self.assertEqual(len(report.transactions), 2)
+        self.assertEqual(report.transactions[0].counterparty, "Max Mustermann")
 
     def test_parses_nested_party_choices_used_by_sparda(self):
         with tempfile.TemporaryDirectory() as directory:

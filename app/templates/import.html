@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-head"><div><div class="eyebrow">Bankumsätze</div><h1>Umsätze importieren</h1><p class="muted">CAMT und MT940 direkt einlesen oder eine CSV-Datei mit Vorschau zuordnen.</p></div></div>
+<div class="page-head"><div><div class="eyebrow">Bankumsätze</div><h1>Umsätze importieren</h1><p class="muted">CAMT als XML oder ZIP und MT940 direkt einlesen oder eine CSV-Datei mit Vorschau zuordnen.</p></div></div>
 <div class="grid two import-grid">
   <section class="card">
     <h2>CAMT oder MT940</h2>
@@ -8,7 +8,7 @@
     <form method="post" enctype="multipart/form-data" class="stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Bankkonto<select name="account_id"><option value="">Automatisch anhand der IBAN erkennen</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}{% if account.iban %} · {{ account.iban }}{% endif %}</option>{% endfor %}</select></label>
-      <label class="dropzone"><strong>CAMT.052, CAMT.053 oder MT940</strong><span>XML-, MT940-, STA- oder TXT-Datei aus dem Onlinebanking</span><input type="file" name="statement" accept=".xml,.mt940,.sta,.txt,application/xml,text/xml,text/plain" required></label>
+      <label class="dropzone"><strong>CAMT.052, CAMT.053 oder MT940</strong><span>XML-, ZIP-, MT940-, STA- oder TXT-Datei aus dem Onlinebanking</span><input type="file" name="statement" accept=".xml,.zip,.mt940,.sta,.txt,application/xml,text/xml,application/zip,text/plain" required></label>
       <button class="button primary" type="submit">Datei prüfen und importieren</button>
     </form>
   </section>
@@ -23,6 +23,7 @@
     </form>
   </section>
 </div>
+{% if csv_profiles %}<section class="card profile-card"><div class="card-head"><div><h2>Gespeicherte CSV-Profile</h2><small>Bekannte Spalten werden beim nächsten Upload automatisch zugeordnet.</small></div></div><div class="profile-list">{% for profile in csv_profiles %}<div><div><strong>{{ profile.name }}</strong><small>Zuletzt geändert: {{ profile.updated_at }}</small></div><form method="post" action="{{ url_for('csv_import_profile_delete', profile_id=profile.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button small" type="submit">Löschen</button></form></div>{% endfor %}</div></section>{% endif %}
 <section class="card info-card"><h2>Sicherer Import</h2><ol><li>Dateistruktur und Buchungen werden vor dem Speichern geprüft.</li><li>Die unveränderte Originaldatei wird mit SHA-256-Prüfsumme archiviert.</li><li>Bereits bekannte Buchungen werden anhand ihres Fingerprints übersprungen.</li><li>Abgeschlossene Geschäftsjahre bleiben gegen neue Importe gesperrt.</li></ol></section>
 <section class="card"><div class="card-head"><h2>Importverlauf</h2></div>{% if batches %}<div class="batch-list">{% for batch in batches %}<div><div><strong>{{ batch.filename }}</strong><small>{{ batch.created_at }} · {{ batch.account_name or batch.account_iban or 'Konto nicht angegeben' }}</small></div><span>{{ batch.imported_count }} neu · {{ batch.duplicate_count }} Duplikate</span><a href="{{ url_for('import_download', batch_id=batch.id) }}">Original</a></div>{% endfor %}</div>{% else %}<div class="empty">Noch keine Dateien importiert.</div>{% endif %}</section>
 {% endblock %}

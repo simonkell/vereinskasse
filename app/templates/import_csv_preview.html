@@ -4,9 +4,10 @@
 <form method="post" action="{{ url_for('import_csv_complete') }}" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="token" value="{{ token }}">
   <section class="card">
-    <div class="card-head"><div><h2>Zuordnung</h2><small>{{ preview.headers|length }} Spalten · Trennzeichen „{{ preview.delimiter }}“ · {{ preview.encoding }}</small></div></div>
+    <div class="card-head"><div><h2>Zuordnung</h2><small>{{ preview.headers|length }} Spalten · Trennzeichen „{{ preview.delimiter }}“ · {{ preview.encoding }}{% if profile %} · Profil „{{ profile.name }}“ erkannt{% endif %}</small></div></div>
     {% set fields = [('booking_date','Buchungsdatum *'),('value_date','Valutadatum'),('amount','Betrag *'),('counterparty','Gegenpartei'),('purpose','Verwendungszweck *'),('reference','Bankreferenz'),('currency','Währung'),('counterparty_iban','IBAN der Gegenpartei')] %}
-    <div class="mapping-grid">{% for field, label in fields %}<label>{{ label }}<select name="{{ field }}"{% if field in ['booking_date','amount','purpose'] %} required{% endif %}><option value="">Nicht importieren</option>{% for header in preview.headers %}<option value="{{ header }}"{% if preview.detected.get(field) == header %} selected{% endif %}>{{ header }}</option>{% endfor %}</select></label>{% endfor %}</div>
+    <div class="mapping-grid">{% for field, label in fields %}<label>{{ label }}<select name="{{ field }}"{% if field in ['booking_date','amount','purpose'] %} required{% endif %}><option value="">Nicht importieren</option>{% for header in preview.headers %}<option value="{{ header }}"{% if mapping.get(field) == header %} selected{% endif %}>{{ header }}</option>{% endfor %}</select></label>{% endfor %}</div>
+    <div class="profile-settings"><label class="checkbox-label"><input type="checkbox" name="save_profile" value="1" checked> Diese Zuordnung für gleich aufgebaute CSV-Dateien speichern</label><label>Profilname<input name="profile_name" maxlength="80" value="{{ profile.name if profile else account.name }}" placeholder="z. B. Sparkasse Vereinskonto"></label></div>
   </section>
   <section class="card">
     <div class="card-head"><h2>Dateivorschau</h2><small>Die ersten {{ preview.rows|length }} Buchungszeilen</small></div>

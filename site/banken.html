@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Welche Banken liefern CAMT oder CSV für die Vereinskasse? Übersicht zu Sparkassen, Volksbanken, Sparda, GLS, Postbank, Commerzbank, ING, N26 und weiteren Banken.">
+  <meta name="theme-color" content="#f7f4ed">
+  <meta property="og:title" content="Unterstützte Banken und Dateiformate · Vereinskasse">
+  <meta property="og:description" content="CAMT, MT940, ZIP und CSV: So kommen Bankumsätze kleiner Vereine in die Vereinskasse.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://simonkell.github.io/vereinskasse/banken.html">
+  <meta property="og:site_name" content="Vereinskasse">
+  <meta property="og:locale" content="de_DE">
+  <meta name="twitter:card" content="summary">
+  <title>Unterstützte Banken &amp; Dateiformate | Vereinskasse</title>
+  <link rel="canonical" href="https://simonkell.github.io/vereinskasse/banken.html">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Zum Inhalt</a>
+  <header class="site-header">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">V</span><span>Vereinskasse</span></a>
+    <nav aria-label="Hauptnavigation"><a href="index.html#so-gehts">So geht's</a><a href="index.html#funktionen">Funktionen</a><a href="banken.html" aria-current="page">Banken &amp; Formate</a><a class="nav-cta" href="index.html#pilot">Pilotverein werden</a></nav>
+  </header>
+
+  <main class="content-page" id="main">
+    <section class="content-hero">
+      <p class="eyebrow">Bankimport für Vereine</p>
+      <h1>Bankumsätze ohne Abtippen übernehmen.</h1>
+      <p class="lead">Vereinskasse liest CAMT.052, CAMT.053, MT940 und flexibel aufgebaute CSV-Dateien. Liefert das Onlinebanking mehrere CAMT-Dateien in einem ZIP, kann auch das ZIP direkt hochgeladen werden.</p>
+      <div class="format-list" aria-label="Unterstützte Dateiformate"><span>CAMT.052</span><span>CAMT.053</span><span>CAMT-ZIP</span><span>MT940</span><span>CSV</span></div>
+    </section>
+
+    <section class="content-section">
+      <p class="eyebrow">Stand Juli 2026</p>
+      <h2>Bei diesen großen Banken ist ein passender Export dokumentiert.</h2>
+      <p>Banken ändern ihre Onlinebanking-Oberflächen und einzelne Kontomodelle können abweichen. Die Tabelle beschreibt deshalb den öffentlich dokumentierten Stand. Entscheidend ist nicht der Name der Bank, sondern ob dein Zugang CAMT, MT940 oder eine CSV mit Datum, Betrag und Verwendungszweck exportiert.</p>
+      <div class="bank-table-wrap">
+        <table class="bank-table">
+          <thead><tr><th>Bank oder Bankgruppe</th><th>Dokumentierte Formate</th><th>Hinweis</th></tr></thead>
+          <tbody>
+            <tr><th>Sparkassen</th><td><span>CAMT</span> <span>CSV</span> <span>MT940</span> <span>ZIP</span></td><td>Je nach Portal direkter Download oder mehrere CAMT-Dateien als ZIP.</td></tr>
+            <tr><th>Volksbanken Raiffeisenbanken</th><td><span>CAMT</span> <span>CSV</span> <span>MT940</span></td><td>Im Firmenkunden- und Vereinsbanking dokumentiert; Oberfläche kann regional variieren.</td></tr>
+            <tr><th>Sparda-Banken</th><td><span>CAMT</span></td><td>CAMT-Export ist unter anderem für Sparda-Bank West dokumentiert.</td></tr>
+            <tr><th>GLS Bank</th><td><span>CAMT</span> <span>CSV</span></td><td>CSV im Onlinebanking, CAMT über die dokumentierten Bankzugänge.</td></tr>
+            <tr><th>Postbank</th><td><span>CSV</span> <span>CAMT</span></td><td>CSV im Onlinebanking; CAMT ist insbesondere im Geschäftskundenbereich dokumentiert.</td></tr>
+            <tr><th>Commerzbank &amp; comdirect</th><td><span>CSV</span></td><td>Umsatzexport als CSV ist in den jeweiligen Hilfebereichen beschrieben.</td></tr>
+            <tr><th>HypoVereinsbank</th><td><span>CAMT</span> <span>CSV</span></td><td>Die verfügbaren Formate hängen vom eingesetzten Banking-Produkt ab.</td></tr>
+            <tr><th>ING</th><td><span>CSV</span></td><td>CSV ist für Geschäftskonten dokumentiert; das aktuelle Angebot richtet sich laut ING nicht an eingetragene Vereine.</td></tr>
+            <tr><th>N26</th><td><span>CSV</span></td><td>CSV-Download der Transaktionen ist dokumentiert; Eignung des Kontomodells für den Verein separat prüfen.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="source-note">Die Übersicht ist keine Garantie für jedes Kontomodell. Fehlt deine Bank, kannst du eine Beispieldatei ohne sensible Echtdaten an <a href="mailto:admin@kell-it.de">admin@kell-it.de</a> senden.</p>
+    </section>
+
+    <section class="content-section format-explainer">
+      <div><p class="eyebrow">Empfehlung</p><h2>Welches Format solltest du wählen?</h2></div>
+      <div class="explainer-grid">
+        <article><strong>1. CAMT</strong><p>Die beste Wahl: standardisiert, mit Gegenpartei, Verwendungszweck, Referenzen und häufig Kontosalden.</p></article>
+        <article><strong>2. MT940</strong><p>Bewährtes Bankformat. Gut geeignet, wenn CAMT im Onlinebanking nicht angeboten wird.</p></article>
+        <article><strong>3. CSV</strong><p>Funktioniert bankübergreifend. Beim ersten Import ordnest du die Spalten zu; danach erkennt Vereinskasse das gespeicherte Profil.</p></article>
+      </div>
+    </section>
+
+    <section class="content-section import-steps">
+      <p class="eyebrow">In drei Schritten</p><h2>Vom Onlinebanking ins Buchungsjournal.</h2>
+      <ol><li>Zeitraum im Onlinebanking auswählen und Umsätze als CAMT, MT940 oder CSV herunterladen.</li><li>Datei oder CAMT-ZIP in Vereinskasse hochladen und bei CSV einmalig die Spalten bestätigen.</li><li>Nur noch Kategorien prüfen und fehlende Belege per PDF oder Smartphone-Kamera ergänzen.</li></ol>
+      <a class="button button-primary" href="index.html#pilot">Vereinskasse 60 Tage testen</a>
+    </section>
+
+    <section class="content-section source-section">
+      <p class="eyebrow">Nachprüfbar</p><h2>Hinweise der Banken zu ihren Exporten.</h2>
+      <p>Die Übersicht basiert auf öffentlich zugänglichen Hilfeseiten und Produktinformationen der Banken. Maßgeblich bleibt immer die Exportauswahl in deinem konkreten Onlinebanking-Zugang.</p>
+      <ul class="source-links">
+        <li><a href="https://www.berliner-sparkasse.de/de/home/login-online-banking/uebersicht-glossare.html?lightbox=%2Fde%2Fhome%2Fonlinebanking%2Fumsaetze%2Fumsaetze%2Fglossar-umsaetze%3Fn%3Dtrue">Sparkasse: Umsatzexporte und Dateiformate</a></li>
+        <li><a href="https://www.berliner-volksbank.de/firmenkunden/produkte-und-loesungen/online-banking.html">Volksbank: Onlinebanking und Umsatzformate</a></li>
+        <li><a href="https://www.sparda-west.de/aktuelle-informationen-it-wechsel-faq-it-wechsel/">Sparda-Bank West: CAMT-Export</a></li>
+        <li><a href="https://www.gls.de/gls-bank/service/fragen-antworten/onlinebanking/welche-umsaetze-kann-ich-abrufen/">GLS Bank: Umsatzabruf und CSV</a></li>
+        <li><a href="https://www.postbank.de/privatkunden/services/online-banking/anleitungen/kontoauszuege-drucken.html">Postbank: Umsätze herunterladen</a></li>
+        <li><a href="https://www.commerzbank.de/service/wie-kann-ich-meine-umsaetze-exportieren/">Commerzbank: Umsätze exportieren</a></li>
+        <li><a href="https://www.comdirect.de/faq/umsaetze?CIF_Check=true">comdirect: Umsätze als CSV</a></li>
+        <li><a href="https://www.ing.de/business/geschaeftskonto/faq/">ING: Geschäftskonto und CSV-Export</a></li>
+        <li><a href="https://support.n26.com/de-de/zahlungen-ueberweisungen-und-abhebungen/kontostand-und-limits/kontoauszug-herunterladen">N26: Kontoauszüge und CSV</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer><a class="brand footer-brand" href="index.html"><span class="brand-mark">V</span><span>Vereinskasse</span></a><p>Die einfache Kassenverwaltung für kleine Vereine.</p><div class="footer-links"><a href="banken.html">Banken &amp; Formate</a><a href="https://github.com/simonkell/vereinskasse">GitHub</a><a href="datenschutz.html">Datenschutz</a><a href="impressum.html">Impressum</a></div></footer>
+</body>
+</html>

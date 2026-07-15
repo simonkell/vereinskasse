@@ -34,7 +34,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .camt import _fingerprint, parse_camt
+from .camt import CamtReport, _fingerprint, parse_camt
 from .csv_import import parse_csv, preview_csv
 from .db import close_db, get_db, init_db, log_action
 from .mt940 import parse_mt940
@@ -57,6 +57,8 @@ TAX_AREAS = (
     "Wirtschaftlicher Geschäftsbetrieb",
 )
 ORGANIZATION_ID = 1
+MAX_CAMT_ZIP_FILES = 20
+MAX_CAMT_ZIP_UNCOMPRESSED = 50 * 1024 * 1024
 
 
 def parse_amount_cents(value):
@@ -80,6 +82,67 @@ def upload_extension(upload):
 def safe_upload_name(upload, extension):
     name = secure_filename(upload.filename) or "beleg"
     return name if "." in name else f"{name}.{extension}"
+
+
+def parse_camt_zip(path, work_dir):
+    """Read bank ZIP exports without trusting or extracting archive paths."""
+    try:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise ValueError("Die Datei ist kein gültiges ZIP-Archiv.") from exc
+    with archive:
+        members = [
+            item
+            for item in archive.infolist()
+            if not item.is_dir() and Path(item.filename).suffix.lower() == ".xml"
+        ]
+        if not members:
+            raise ValueError("Das ZIP-Archiv enthält keine CAMT-XML-Datei.")
+        if len(members) > MAX_CAMT_ZIP_FILES:
+            raise ValueError(
+                f"Das ZIP-Archiv enthält mehr als {MAX_CAMT_ZIP_FILES} XML-Dateien."
+            )
+        if sum(item.file_size for item in members) > MAX_CAMT_ZIP_UNCOMPRESSED:
+            raise ValueError("Die entpackten CAMT-Dateien sind zusammen zu groß.")
+
+        reports = []
+        for item in members:
+            temporary = Path(work_dir) / f"zip-{uuid.uuid4().hex}.xml"
+            try:
+                try:
+                    content = archive.read(item)
+                except (RuntimeError, zipfile.BadZipFile) as exc:
+                    raise ValueError(
+                        "Eine XML-Datei im ZIP-Archiv konnte nicht gelesen werden."
+                    ) from exc
+                if len(content) > MAX_CAMT_ZIP_UNCOMPRESSED:
+                    raise ValueError("Eine entpackte CAMT-Datei ist zu groß.")
+                temporary.write_bytes(content)
+                reports.append(parse_camt(temporary))
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    ibans = {report.account_iban for report in reports if report.account_iban}
+    if len(ibans) > 1:
+        raise ValueError("Das ZIP-Archiv enthält CAMT-Dateien für mehrere Bankkonten.")
+    transactions = {}
+    balances = {}
+    for report in reports:
+        for transaction in report.transactions:
+            transactions.setdefault(transaction.fingerprint, transaction)
+        for balance in report.balances:
+            key = (
+                balance.balance_type,
+                balance.balance_date,
+                balance.amount_cents,
+                balance.currency,
+            )
+            balances.setdefault(key, balance)
+    return CamtReport(
+        account_iban=next(iter(ibans), ""),
+        transactions=list(transactions.values()),
+        balances=list(balances.values()),
+    )
 
 
 def refresh_camt_counterparties():
@@ -1506,22 +1569,39 @@ def create_app(test_config=None):
                 "SELECT * FROM accounts WHERE organization_id=? AND kind='bank' AND active=1 ORDER BY name",
                 (ORGANIZATION_ID,),
             ).fetchall()
-            return render_template("import.html", batches=batches, accounts=accounts)
+            csv_profiles = db.execute(
+                """SELECT * FROM csv_import_profiles
+                   WHERE organization_id=? ORDER BY name""",
+                (ORGANIZATION_ID,),
+            ).fetchall()
+            return render_template(
+                "import.html",
+                batches=batches,
+                accounts=accounts,
+                csv_profiles=csv_profiles,
+            )
 
         upload = request.files.get("statement")
         if not upload or not upload.filename:
             flash("Bitte eine CAMT- oder MT940-Datei auswählen.", "error")
             return redirect(url_for("import_file"))
         suffix = Path(secure_filename(upload.filename)).suffix.lower()
-        parser = parse_camt if suffix == ".xml" else parse_mt940 if suffix in {".mt940", ".sta", ".txt"} else None
-        if parser is None:
-            flash("Direkt unterstützt werden XML (CAMT) sowie MT940-, STA- und TXT-Dateien.", "error")
+        if suffix not in {".xml", ".zip", ".mt940", ".sta", ".txt"}:
+            flash(
+                "Direkt unterstützt werden CAMT als XML oder ZIP sowie MT940-, STA- und TXT-Dateien.",
+                "error",
+            )
             return redirect(url_for("import_file"))
         temporary = Path(app.config["DATA_DIR"]) / "imports" / f"tmp-{uuid.uuid4().hex}{suffix}"
         upload.save(temporary)
         file_hash = hashlib.sha256(temporary.read_bytes()).hexdigest()
         try:
-            report = parser(temporary)
+            if suffix == ".zip":
+                report = parse_camt_zip(temporary, Path(app.config["DATA_DIR"]) / "imports")
+            elif suffix == ".xml":
+                report = parse_camt(temporary)
+            else:
+                report = parse_mt940(temporary)
         except ValueError as exc:
             temporary.unlink(missing_ok=True)
             flash(str(exc), "error")
@@ -1564,12 +1644,38 @@ def create_app(test_config=None):
             temporary.unlink(missing_ok=True)
             flash(str(exc), "error")
             return redirect(url_for("import_file"))
+        profile = db.execute(
+            """SELECT * FROM csv_import_profiles
+               WHERE organization_id=? AND header_signature=?""",
+            (ORGANIZATION_ID, preview.signature),
+        ).fetchone()
+        detected_mapping = dict(preview.detected)
+        if profile is not None:
+            try:
+                stored_mapping = json.loads(profile["mapping_json"])
+            except (TypeError, json.JSONDecodeError):
+                stored_mapping = {}
+            detected_mapping.update(
+                {
+                    field: header
+                    for field, header in stored_mapping.items()
+                    if header in preview.headers
+                }
+            )
         session["csv_preview"] = {
             "token": token,
             "filename": secure_filename(upload.filename) or "kontoauszug.csv",
             "account_id": int(account_id),
+            "header_signature": preview.signature,
         }
-        return render_template("import_csv_preview.html", preview=preview, account=account, token=token)
+        return render_template(
+            "import_csv_preview.html",
+            preview=preview,
+            account=account,
+            token=token,
+            mapping=detected_mapping,
+            profile=profile,
+        )
 
     @app.post("/import/csv/complete")
     @login_required
@@ -1602,6 +1708,26 @@ def create_app(test_config=None):
             session.pop("csv_preview", None)
             flash(str(exc), "error")
             return redirect(url_for("import_file"))
+        if request.form.get("save_profile") == "1":
+            profile_name = request.form.get("profile_name", "").strip()[:80]
+            if not profile_name:
+                profile_name = account["name"]
+            db.execute(
+                """INSERT INTO csv_import_profiles(
+                       organization_id,name,header_signature,mapping_json
+                   ) VALUES (?,?,?,?)
+                   ON CONFLICT(organization_id,header_signature) DO UPDATE SET
+                       name=excluded.name,
+                       mapping_json=excluded.mapping_json,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (
+                    ORGANIZATION_ID,
+                    profile_name,
+                    saved.get("header_signature", ""),
+                    json.dumps(mapping, ensure_ascii=False),
+                ),
+            )
+            db.commit()
         session.pop("csv_preview", None)
         return complete_import(
             report,
@@ -1610,6 +1736,22 @@ def create_app(test_config=None):
             saved["filename"],
             account["id"],
         )
+
+    @app.post("/import/csv-profiles/<int:profile_id>/delete")
+    @login_required
+    def csv_import_profile_delete(profile_id):
+        db = get_db()
+        profile = db.execute(
+            "SELECT * FROM csv_import_profiles WHERE id=? AND organization_id=?",
+            (profile_id, ORGANIZATION_ID),
+        ).fetchone()
+        if profile is None:
+            abort(404)
+        db.execute("DELETE FROM csv_import_profiles WHERE id=?", (profile_id,))
+        log_action(db, "deleted", "csv_import_profile", profile_id, profile["name"])
+        db.commit()
+        flash("CSV-Profil gelöscht.", "success")
+        return redirect(url_for("import_file"))
 
     @app.get("/imports/<int:batch_id>/original")
     @login_required

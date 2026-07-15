@@ -58,6 +58,52 @@ class AppTest(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual(batch_count, 1)
 
+    def test_imports_camt_zip_and_deduplicates_files_inside_archive(self):
+        archive_data = io.BytesIO()
+        with zipfile.ZipFile(archive_data, "w") as archive:
+            archive.writestr("Umsaetze/erstes.xml", CAMT)
+            archive.writestr("Umsaetze/duplikat.xml", CAMT)
+            archive.writestr("Hinweise.txt", "Kein Kontoauszug")
+        archive_data.seek(0)
+
+        response = self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (archive_data, "sparkasse-export.zip"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        count = connection.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        batch = connection.execute(
+            "SELECT filename,imported_count,stored_path FROM import_batches"
+        ).fetchone()
+        connection.close()
+        self.assertEqual(count, 2)
+        self.assertEqual(batch[0:2], ("sparkasse-export.zip", 2))
+        self.assertTrue(batch[2].endswith(".zip"))
+
+    def test_rejects_zip_without_camt_xml(self):
+        archive_data = io.BytesIO()
+        with zipfile.ZipFile(archive_data, "w") as archive:
+            archive.writestr("Hinweise.txt", "Kein Kontoauszug")
+        archive_data.seek(0)
+
+        response = self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (archive_data, "export.zip"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertIn("keine CAMT-XML-Datei".encode(), response.data)
+
     def test_import_creates_and_assigns_bank_account(self):
         self.client.post(
             "/import",
@@ -239,13 +285,42 @@ class AppTest(unittest.TestCase):
                 "counterparty": "Begünstigter/Zahlungspflichtiger",
                 "purpose": "Verwendungszweck", "amount": "Betrag",
                 "currency": "Währung", "reference": "Referenz",
+                "save_profile": "1", "profile_name": "Vereinsbank CSV",
             },
         )
         self.assertEqual(response.status_code, 302)
         connection = sqlite3.connect(self.app.config["DATABASE"])
         amounts = [row[0] for row in connection.execute("SELECT amount_cents FROM transactions ORDER BY id")]
+        profile = connection.execute(
+            "SELECT id,name,mapping_json FROM csv_import_profiles"
+        ).fetchone()
         connection.close()
         self.assertEqual(amounts, [4250, -1999])
+        self.assertEqual(profile[1], "Vereinsbank CSV")
+        self.assertEqual(json.loads(profile[2])["purpose"], "Verwendungszweck")
+
+        second_preview = self.client.post(
+            "/import/csv/preview",
+            data={
+                "csrf_token": self.csrf(), "account_id": str(account_id),
+                "statement": (io.BytesIO(CSV_STATEMENT.encode()), "neu.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertIn("Vereinsbank CSV".encode(), second_preview.data)
+        self.assertIn("erkannt".encode(), second_preview.data)
+
+        delete_response = self.client.post(
+            f"/import/csv-profiles/{profile[0]}/delete",
+            data={"csrf_token": self.csrf()},
+        )
+        self.assertEqual(delete_response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        profile_count = connection.execute(
+            "SELECT COUNT(*) FROM csv_import_profiles"
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(profile_count, 0)
 
     def test_cash_entry_is_added_to_shared_journal(self):
         self.client.post(
