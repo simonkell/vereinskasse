@@ -51,6 +51,12 @@ def _desc_text(node, name):
     return (found.text or "").strip() if found is not None else ""
 
 
+def _party_text(node, role):
+    """Read party names from both older and current ISO 20022 structures."""
+    party = _first_text(node, "RltdPties", role, "Nm")
+    return party or _first_text(node, "RltdPties", role, "Pty", "Nm")
+
+
 def _iso_date(node, container):
     parent = next((c for c in list(node) if _local(c.tag) == container), None)
     if parent is None:
@@ -120,10 +126,10 @@ def parse_camt(path: str | Path) -> CamtReport:
                 currency = amount_node.attrib.get("Ccy", entry_currency)
 
                 if direction == "DBIT":
-                    counterparty = _first_text(detail, "RltdPties", "Cdtr", "Nm")
+                    counterparty = _party_text(detail, "Cdtr")
                     counterparty_iban = _first_text(detail, "RltdPties", "CdtrAcct", "Id", "IBAN")
                 else:
-                    counterparty = _first_text(detail, "RltdPties", "Dbtr", "Nm")
+                    counterparty = _party_text(detail, "Dbtr")
                     counterparty_iban = _first_text(detail, "RltdPties", "DbtrAcct", "Id", "IBAN")
 
                 purposes = [

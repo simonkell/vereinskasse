@@ -7,7 +7,8 @@ import zipfile
 from pathlib import Path
 
 from app import create_app
-from tests.test_camt import CAMT
+from app.camt import _fingerprint
+from tests.test_camt import CAMT, CAMT_NESTED_PARTIES
 from tests.test_importers import CSV_STATEMENT, MT940
 
 
@@ -69,6 +70,44 @@ class AppTest(unittest.TestCase):
         self.assertEqual(account[1], "DE02120300000000202051")
         self.assertEqual(account[2], "bank")
         self.assertEqual(assigned, 2)
+
+    def test_startup_repairs_blank_sparda_counterparties_from_original(self):
+        self.client.post(
+            "/import",
+            data={
+                "csrf_token": self.csrf(),
+                "statement": (io.BytesIO(CAMT_NESTED_PARTIES.encode()), "sparda.xml"),
+            },
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        row = connection.execute(
+            """SELECT id,account_iban,booking_date,amount_cents,currency,
+                      bank_reference,purpose
+               FROM transactions ORDER BY id LIMIT 1"""
+        ).fetchone()
+        legacy_fingerprint = _fingerprint(
+            [row[1], row[2], str(row[3]), row[4], row[5], "", row[6]]
+        )
+        connection.execute(
+            """UPDATE transactions
+               SET counterparty='',counterparty_iban='',fingerprint=? WHERE id=?""",
+            (legacy_fingerprint, row[0]),
+        )
+        connection.commit()
+        connection.close()
+
+        create_app(dict(self.app.config))
+
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        repaired = connection.execute(
+            "SELECT counterparty,counterparty_iban,fingerprint FROM transactions WHERE id=?",
+            (row[0],),
+        ).fetchone()
+        connection.close()
+        self.assertEqual(repaired[0], "Erika Beispiel")
+        self.assertEqual(repaired[1], "DE11111111111111111111")
+        self.assertNotEqual(repaired[2], legacy_fingerprint)
 
     def test_mt940_import_uses_same_journal(self):
         response = self.client.post(

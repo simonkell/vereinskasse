@@ -153,6 +153,8 @@ ergänzt werden nur Kategorie, Belegstatus und interne Notiz.
 
 Bestehende Installationen werden beim Start automatisch migriert: Bereits importierte
 IBANs werden als Bankkonten angelegt und vorhandene Buchungen diesen Konten zugeordnet.
+Fehlende Gegenparteien aus älteren CAMT-Importen werden aus den gespeicherten
+Originaldateien ergänzt, sofern die Bank sie im Datensatz mitgeliefert hat.
 Prüfungsfreigaben speichern einen Snapshot der Buchungsdaten; der geheime Link wird nur
 einmal angezeigt und in der Datenbank ausschließlich als SHA-256-Prüfwert gespeichert.
 

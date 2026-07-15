@@ -21,6 +21,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    current_app,
     flash,
     g,
     redirect,
@@ -32,7 +33,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .camt import parse_camt
+from .camt import _fingerprint, parse_camt
 from .csv_import import parse_csv, preview_csv
 from .db import close_db, get_db, init_db, log_action
 from .mt940 import parse_mt940
@@ -61,6 +62,74 @@ def parse_amount_cents(value):
     return int(amount * 100)
 
 
+def refresh_camt_counterparties():
+    """Enrich blank party metadata from CAMT originals imported by older versions."""
+    db = get_db()
+    batches = db.execute(
+        """SELECT DISTINCT b.id,b.stored_path
+           FROM import_batches b
+           JOIN transactions t ON t.import_batch_id=b.id
+           WHERE lower(b.stored_path) LIKE '%.xml'
+             AND COALESCE(t.counterparty,'')=''"""
+    ).fetchall()
+    repaired = 0
+    for batch in batches:
+        path = Path(current_app.config["DATA_DIR"]) / batch["stored_path"]
+        if not path.is_file():
+            continue
+        try:
+            report = parse_camt(path)
+        except (OSError, ValueError):
+            continue
+        for tx in report.transactions:
+            if not tx.counterparty:
+                continue
+            legacy_fingerprint = _fingerprint(
+                [
+                    tx.account_iban,
+                    tx.booking_date,
+                    str(tx.amount_cents),
+                    tx.currency,
+                    tx.bank_reference,
+                    "",
+                    tx.purpose,
+                ]
+            )
+            existing = db.execute(
+                """SELECT id FROM transactions
+                   WHERE import_batch_id=? AND fingerprint=?
+                     AND COALESCE(counterparty,'')=''""",
+                (batch["id"], legacy_fingerprint),
+            ).fetchone()
+            if existing is None:
+                continue
+            try:
+                db.execute(
+                    """UPDATE transactions
+                       SET counterparty=?,counterparty_iban=?,fingerprint=?,updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (tx.counterparty, tx.counterparty_iban, tx.fingerprint, existing["id"]),
+                )
+            except sqlite3.IntegrityError:
+                db.execute(
+                    """UPDATE transactions
+                       SET counterparty=?,counterparty_iban=?,updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (tx.counterparty, tx.counterparty_iban, existing["id"]),
+                )
+            repaired += 1
+    if repaired:
+        log_action(
+            db,
+            "metadata_repaired",
+            "transactions",
+            None,
+            json.dumps({"counterparties": repaired}),
+        )
+        db.commit()
+    return repaired
+
+
 def create_app(test_config=None):
     app = Flask(__name__)
     data_dir = Path(os.environ.get("DATA_DIR", "data")).resolve()
@@ -82,6 +151,7 @@ def create_app(test_config=None):
     app.teardown_appcontext(close_db)
     with app.app_context():
         init_db()
+        refresh_camt_counterparties()
 
     @app.template_filter("money")
     def money(cents, currency="EUR"):
