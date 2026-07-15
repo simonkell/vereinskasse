@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="share-created card">
+  <div class="eyebrow">Prüfungsstand erstellt</div><h1>{{ label }}</h1>
+  <p>Dieser Link wird aus Sicherheitsgründen nur jetzt vollständig angezeigt. Er ist bis {{ expires_at|date_de }} gültig und kann unter „Kassenprüfung“ widerrufen werden.</p>
+  <label>Öffentlicher Nur-Lese-Link<input value="{{ share_url }}" readonly onclick="this.select()"></label>
+  <div class="actions"><a class="button primary" href="{{ share_url }}" target="_blank">Prüfungsansicht öffnen</a><a class="button" href="{{ url_for('reviews') }}">Zurück</a></div>
+</div>
+{% endblock %}

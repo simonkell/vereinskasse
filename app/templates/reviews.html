@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Nur-Lese-Freigabe</div><h1>Kassenprüfung</h1><p class="muted">Erzeuge einen unveränderlichen Prüfungsstand mit Belegen. Der geheime Link kann widerrufen werden und läuft automatisch ab.</p></div></div>
+<div class="grid two review-layout">
+  <section class="card">
+    <h2>Neue Prüfung freigeben</h2>
+    {% if years %}<form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Bezeichnung<input name="label" placeholder="z. B. Kassenprüfung 2026"></label>
+      <label>Geschäftsjahr<select name="year">{% for year in years %}<option>{{ year }}</option>{% endfor %}</select></label>
+      <label>Gültigkeit<select name="expires_days"><option value="7">7 Tage</option><option value="30" selected>30 Tage</option><option value="90">90 Tage</option></select></label>
+      <button class="button primary" type="submit">Prüfungsstand erzeugen</button>
+    </form>{% else %}<div class="empty compact">Es gibt noch keine Buchungen, die freigegeben werden können.</div>{% endif %}
+  </section>
+  <section class="card info-card"><h2>Was sehen Kassenprüfer?</h2><ol><li>Konten, Salden und alle Buchungen des gewählten Jahres.</li><li>Kategorien, Belegstatus und freigegebene Belege.</li><li>Keine Bearbeitungsfunktionen und keinen Zugang zur Verwaltung.</li><li>Genau den Stand zum Zeitpunkt der Freigabe.</li></ol></section>
+</div>
+<section class="card"><div class="card-head"><h2>Bisherige Freigaben</h2></div>{% if shares %}<div class="share-list">{% for share in shares %}<div><div><strong>{{ share.label }}</strong><small>{{ share.year }} · erstellt {{ share.created_at }} · gültig bis {{ share.expires_at|date_de }}</small></div>{% if share.revoked_at %}<span class="badge not_required">Widerrufen</span>{% else %}<form method="post" action="{{ url_for('review_revoke', share_id=share.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button small" type="submit">Widerrufen</button></form>{% endif %}</div>{% endfor %}</div>{% else %}<div class="empty compact">Noch keine Prüfungsfreigabe erzeugt.</div>{% endif %}</section>
+{% endblock %}

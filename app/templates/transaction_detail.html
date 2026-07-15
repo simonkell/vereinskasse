@@ -23,6 +23,5 @@
     </form>
   </section>
 </div>
-<section class="card metadata"><h2>Bankdaten</h2><dl><div><dt>Wertstellung</dt><dd>{{ transaction.value_date|date_de }}</dd></div><div><dt>Gegenkonto</dt><dd>{{ transaction.counterparty_iban or '—' }}</dd></div><div><dt>Bankreferenz</dt><dd>{{ transaction.bank_reference or '—' }}</dd></div><div><dt>Vereinskonto</dt><dd>{{ transaction.account_iban or '—' }}</dd></div></dl></section>
+<section class="card metadata"><h2>Buchungsdaten</h2><dl><div><dt>Konto</dt><dd>{{ transaction.account_name or '—' }}</dd></div><div><dt>Wertstellung</dt><dd>{{ transaction.value_date|date_de }}</dd></div><div><dt>Gegenkonto</dt><dd>{{ transaction.counterparty_iban or '—' }}</dd></div><div><dt>Referenz</dt><dd>{{ transaction.bank_reference or ('Barbuchung' if transaction.account_kind == 'cash' else '—') }}</dd></div></dl></section>
 {% endblock %}
-

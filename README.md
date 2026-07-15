@@ -7,6 +7,9 @@ digitalen Belegen vervollständigt.
 ## Funktionsumfang
 
 - CAMT.052/CAMT.053-Import mit Duplikaterkennung
+- bis zu drei Bankkonten und eine manuell geführte Barkasse
+- Anfangsbestand und laufender Saldo je Konto
+- Barbuchungen im gemeinsamen Buchungsjournal
 - unveränderte Archivierung der importierten Originaldatei inklusive SHA-256-Prüfsumme
 - Buchungsjournal mit Jahres- und Prüfstatusfilter
 - Kategorien und Zuordnung zu den vier steuerlichen Bereichen eines gemeinnützigen Vereins
@@ -14,6 +17,8 @@ digitalen Belegen vervollständigt.
 - Status `Beleg fehlt`, `Vollständig` oder `Kein Beleg erforderlich`
 - Jahresübersicht und CSV-Export
 - Prüfprotokoll für Importe, Beleguploads und fachliche Änderungen
+- zeitlich begrenzte, widerrufbare Nur-Lese-Freigaben für Kassenprüfer
+- unveränderliche Prüfungsstände, die spätere Änderungen nicht rückwirkend verändern
 - responsives Webinterface, Einzelbenutzer-Anmeldung und CSRF-Schutz
 
 Die Anwendung unterstützt den Arbeitsablauf, ersetzt aber keine steuerliche Beratung
@@ -140,6 +145,11 @@ keine doppelten Buchungen. Die Original-CAMT-Datei und jeder Beleg werden mit ei
 Prüfsumme gespeichert. Bankdaten lassen sich über die Oberfläche nicht verändern;
 ergänzt werden nur Kategorie, Belegstatus und interne Notiz.
 
+Bestehende Installationen werden beim Start automatisch migriert: Bereits importierte
+IBANs werden als Bankkonten angelegt und vorhandene Buchungen diesen Konten zugeordnet.
+Prüfungsfreigaben speichern einen Snapshot der Buchungsdaten; der geheime Link wird nur
+einmal angezeigt und in der Datenbank ausschließlich als SHA-256-Prüfwert gespeichert.
+
 ## Noch nicht enthalten
 
 - direkter FinTS-/HBCI-Abruf
@@ -148,6 +158,7 @@ ergänzt werden nur Kategorie, Belegstatus und interne Notiz.
 - revisionssichere Korrektur-/Stornobuchungen
 - ZIP-Jahresarchiv und PDF-Kassenbericht
 - automatische Belegerkennung/OCR
+- MT940- und frei konfigurierbare CSV-Importe
 
 Diese Punkte sollten anhand des echten Vereinsablaufs priorisiert werden, statt sie
 vorab in die erste Version einzubauen.

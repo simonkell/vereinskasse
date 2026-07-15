@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">{{ organization.name }}</div><h1>Konten &amp; Barkasse</h1><p class="muted">Bis zu drei Bankkonten und eine Barkasse – gemeinsam in einem Journal.</p></div><a class="button primary" href="{{ url_for('import_file') }}">Kontoauszug importieren</a></div>
+
+<div class="grid account-layout">
+  <section class="card">
+    <h2>Verein</h2>
+    <form method="post" class="stack compact-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="organization">
+      <label>Vereinsname<input name="organization_name" value="{{ organization.name }}" required></label>
+      <button class="button" type="submit">Namen speichern</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Neues Konto</h2>
+    <form method="post" class="stack compact-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Typ<select name="kind"><option value="bank">Bankkonto</option><option value="cash">Barkasse</option></select></label>
+      <label>Name<input name="name" placeholder="z. B. Vereinskonto oder Barkasse" required></label>
+      <label>IBAN <span class="muted">(nur Bankkonto)</span><input name="iban" placeholder="DE…"></label>
+      <label>Anfangsbestand<input name="opening_balance" inputmode="decimal" value="0,00" required></label>
+      <button class="button primary" type="submit">Konto anlegen</button>
+    </form>
+  </section>
+</div>
+
+<section class="account-cards">
+{% for account in accounts %}
+  <article class="card account-card">
+    <div class="account-card-head"><div><span class="badge {{ 'complete' if account.kind == 'bank' else 'not_required' }}">{{ 'Bankkonto' if account.kind == 'bank' else 'Barkasse' }}</span><h2>{{ account.name }}</h2><p class="muted">{{ account.iban or 'Manuell geführte Kasse' }} · {{ account.transaction_count }} Buchungen</p></div><strong>{{ account.balance_cents|money(account.currency) }}</strong></div>
+    <div class="actions"><a class="button" href="{{ url_for('transactions', account_id=account.id) }}">Buchungen anzeigen</a>{% if account.kind == 'bank' %}<a class="button" href="{{ url_for('import_file') }}">Importieren</a>{% endif %}</div>
+    <details class="cash-entry"><summary>Kontodaten bearbeiten</summary><form method="post" action="{{ url_for('account_update', account_id=account.id) }}" class="stack compact-stack"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="form-row"><label>Name<input name="name" value="{{ account.name }}" required></label>{% if account.kind == 'bank' %}<label>IBAN<input name="iban" value="{{ account.iban or '' }}"></label>{% endif %}<label>Anfangsbestand<input name="opening_balance" value="{{ '%.2f'|format(account.opening_balance_cents / 100)|replace('.', ',') }}" required></label></div><button class="button" type="submit">Kontodaten speichern</button></form></details>
+    {% if account.kind == 'cash' %}
+    <details class="cash-entry"><summary>Barbuchung erfassen</summary>
+      <form method="post" action="{{ url_for('cash_entry', account_id=account.id) }}" class="stack compact-stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row"><label>Datum<input type="date" name="booking_date" required></label><label>Art<select name="direction"><option value="income">Einnahme</option><option value="expense">Ausgabe</option></select></label><label>Betrag<input name="amount" inputmode="decimal" placeholder="0,00" required></label></div>
+        <label>Verwendungszweck<input name="purpose" placeholder="Wofür wurde das Geld eingenommen oder ausgegeben?" required></label>
+        <div class="form-row"><label>Gegenpartei<input name="counterparty" placeholder="Optional"></label><label>Kategorie<select name="category_id"><option value="">Noch nicht zugeordnet</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></label><label>Belegstatus<select name="receipt_status"><option value="missing">Beleg fehlt</option><option value="complete">Vollständig</option><option value="not_required">Nicht erforderlich</option></select></label></div>
+        <label>Notiz<textarea name="note" rows="2"></textarea></label>
+        <button class="button primary" type="submit">Barbuchung speichern</button>
+      </form>
+    </details>
+    {% endif %}
+  </article>
+{% else %}
+  <div class="empty">Noch kein Konto angelegt. Beim ersten CAMT-Import kann ein Bankkonto automatisch anhand der IBAN entstehen.</div>
+{% endfor %}
+</section>
+{% endblock %}

@@ -15,6 +15,12 @@
   <article class="metric attention"><span>Offene Prüfung</span><strong>{{ totals.missing or 0 }} Belege</strong><small>{{ totals.uncategorized or 0 }} ohne Kategorie</small></article>
 </section>
 
+{% if account_balances %}
+<section class="account-strip">
+  {% for account in account_balances %}<a href="{{ url_for('transactions', account_id=account.id) }}"><span>{{ 'Barkasse' if account.kind == 'cash' else 'Bankkonto' }}</span><strong>{{ account.name }}</strong><b>{{ account.balance_cents|money(account.currency) }}</b></a>{% endfor %}
+</section>
+{% endif %}
+
 <div class="grid two">
   <section class="card">
     <div class="card-head"><div><h2>Nach Kategorie</h2><p class="muted">Saldo im Geschäftsjahr</p></div><a href="{{ url_for('export_csv', year=selected_year) }}">CSV exportieren</a></div>
@@ -25,9 +31,8 @@
   <section class="card">
     <div class="card-head"><div><h2>Zuletzt importiert</h2><p class="muted">Die neuesten Kontobewegungen</p></div><a href="{{ url_for('transactions') }}">Alle anzeigen</a></div>
     {% if recent %}<div class="mini-list">{% for tx in recent %}
-      <a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span class="status-dot {{ tx.receipt_status }}"></span><div><strong>{{ tx.counterparty or 'Unbekannte Gegenpartei' }}</strong><small>{{ tx.booking_date|date_de }} · {{ tx.category_name or 'Ohne Kategorie' }}</small></div><b class="{{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</b></a>
+      <a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span class="status-dot {{ tx.receipt_status }}"></span><div><strong>{{ tx.counterparty or 'Unbekannte Gegenpartei' }}</strong><small>{{ tx.booking_date|date_de }} · {{ tx.account_name or 'Ohne Konto' }} · {{ tx.category_name or 'Ohne Kategorie' }}</small></div><b class="{{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</b></a>
     {% endfor %}</div>{% else %}<div class="empty">Importiere deinen ersten CAMT-Kontoauszug.</div>{% endif %}
   </section>
 </div>
 {% endblock %}
-
