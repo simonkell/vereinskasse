@@ -10,6 +10,7 @@ import secrets
 import shutil
 import sqlite3
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import wraps
@@ -101,6 +102,16 @@ def create_app(test_config=None):
 
         return wrapped
 
+    def year_is_closed(db, year):
+        return db.execute(
+            "SELECT 1 FROM year_closures WHERE organization_id=? AND year=?",
+            (ORGANIZATION_ID, str(year)),
+        ).fetchone() is not None
+
+    def transaction_is_closed(db, transaction_id):
+        row = db.execute("SELECT booking_date FROM transactions WHERE id=?", (transaction_id,)).fetchone()
+        return row is not None and year_is_closed(db, row["booking_date"][:4])
+
     @app.before_request
     def csrf_protect():
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.endpoint != "login":
@@ -187,16 +198,24 @@ def create_app(test_config=None):
             """
             SELECT COALESCE(c.name, 'Ohne Kategorie') name,
                    COALESCE(c.tax_area, 'Nicht zugeordnet') tax_area,
-                   SUM(t.amount_cents) total, COUNT(*) count
-            FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-            WHERE substr(t.booking_date, 1, 4) = ?
-            GROUP BY c.id, c.name, c.tax_area ORDER BY ABS(SUM(t.amount_cents)) DESC
+                   SUM(b.amount_cents) total, COUNT(*) count
+            FROM (
+                SELECT t.category_id, t.amount_cents FROM transactions t
+                WHERE substr(t.booking_date,1,4)=?
+                  AND NOT EXISTS (SELECT 1 FROM transaction_splits s WHERE s.transaction_id=t.id)
+                UNION ALL
+                SELECT s.category_id, s.amount_cents FROM transaction_splits s
+                JOIN transactions t ON t.id=s.transaction_id
+                WHERE substr(t.booking_date,1,4)=?
+            ) b LEFT JOIN categories c ON c.id = b.category_id
+            GROUP BY c.id, c.name, c.tax_area ORDER BY ABS(SUM(b.amount_cents)) DESC
             """,
-            (selected_year,),
+            (selected_year, selected_year),
         ).fetchall()
         recent = db.execute(
             """
             SELECT t.*, c.name category_name, a.name account_name, a.kind account_kind,
+                   (SELECT COUNT(*) FROM transaction_splits s WHERE s.transaction_id=t.id) split_count,
                    (SELECT COUNT(*) FROM attachments a WHERE a.transaction_id=t.id) attachment_count
             FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
             LEFT JOIN accounts a ON a.id=t.account_id
@@ -232,6 +251,7 @@ def create_app(test_config=None):
         account_id = request.args.get("account_id", "")
         query = """
             SELECT t.*, c.name category_name, a.name account_name, a.kind account_kind,
+                   (SELECT COUNT(*) FROM transaction_splits s WHERE s.transaction_id=t.id) split_count,
                    (SELECT COUNT(*) FROM attachments a WHERE a.transaction_id=t.id) attachment_count
             FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
             LEFT JOIN accounts a ON a.id=t.account_id WHERE 1=1
@@ -243,7 +263,7 @@ def create_app(test_config=None):
         if status == "missing":
             query += " AND t.receipt_status='missing'"
         elif status == "uncategorized":
-            query += " AND t.category_id IS NULL"
+            query += " AND t.category_id IS NULL AND NOT EXISTS (SELECT 1 FROM transaction_splits s WHERE s.transaction_id=t.id)"
         if account_id:
             query += " AND t.account_id=?"
             params.append(account_id)
@@ -283,21 +303,37 @@ def create_app(test_config=None):
             "SELECT * FROM attachments WHERE transaction_id=? ORDER BY created_at", (transaction_id,)
         ).fetchall()
         categories = db.execute("SELECT * FROM categories WHERE active=1 ORDER BY name").fetchall()
+        splits = db.execute(
+            """SELECT s.*, c.name category_name, c.tax_area FROM transaction_splits s
+               JOIN categories c ON c.id=s.category_id WHERE s.transaction_id=? ORDER BY s.id""",
+            (transaction_id,),
+        ).fetchall()
         return render_template(
             "transaction_detail.html",
             transaction=transaction,
             attachments=attachments,
             categories=categories,
+            splits=splits,
+            split_total=sum(row["amount_cents"] for row in splits),
+            year_closed=year_is_closed(db, transaction["booking_date"][:4]),
         )
 
     @app.post("/transactions/<int:transaction_id>/update")
     @login_required
     def transaction_update(transaction_id):
         db = get_db()
+        if transaction_is_closed(db, transaction_id):
+            flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         category_id = request.form.get("category_id") or None
         status = request.form.get("receipt_status", "missing")
         if status not in {"missing", "complete", "not_required"}:
             abort(400)
+        if category_id and db.execute(
+            "SELECT 1 FROM transaction_splits WHERE transaction_id=?", (transaction_id,)
+        ).fetchone():
+            flash("Entferne zuerst die Splitbuchung, bevor du eine Gesamtkategorie zuordnest.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         db.execute(
             """UPDATE transactions SET category_id=?, receipt_status=?, note=?, updated_at=CURRENT_TIMESTAMP
                WHERE id=?""",
@@ -327,6 +363,9 @@ def create_app(test_config=None):
             return redirect(url_for("transaction_detail", transaction_id=transaction_id))
 
         db = get_db()
+        if transaction_is_closed(db, transaction_id):
+            flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
         if db.execute("SELECT 1 FROM transactions WHERE id=?", (transaction_id,)).fetchone() is None:
             abort(404)
         storage_name = f"{uuid.uuid4().hex}.{extension}"
@@ -352,6 +391,70 @@ def create_app(test_config=None):
         log_action(db, "uploaded", "attachment", transaction_id, upload.filename)
         db.commit()
         flash("Beleg hochgeladen.", "success")
+        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+    @app.post("/transactions/<int:transaction_id>/splits")
+    @login_required
+    def transaction_splits_update(transaction_id):
+        db = get_db()
+        transaction = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
+        if transaction is None:
+            abort(404)
+        if year_is_closed(db, transaction["booking_date"][:4]):
+            flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        category_ids = request.form.getlist("split_category_id")
+        amounts = request.form.getlist("split_amount")
+        notes = request.form.getlist("split_note")
+        parsed = []
+        sign = 1 if transaction["amount_cents"] >= 0 else -1
+        for category_id, amount, note in zip(category_ids, amounts, notes):
+            if not category_id and not amount.strip():
+                continue
+            try:
+                cents = abs(parse_amount_cents(amount)) * sign
+                category_id_int = int(category_id)
+            except (ValueError, TypeError):
+                flash("Bitte jede Aufteilungszeile vollständig ausfüllen.", "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            if cents == 0:
+                flash("Aufteilungsbeträge müssen größer als null sein.", "error")
+                return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+            if db.execute("SELECT 1 FROM categories WHERE id=? AND active=1", (category_id_int,)).fetchone() is None:
+                abort(400)
+            parsed.append((category_id_int, cents, note.strip()))
+        if len(parsed) < 2:
+            flash("Eine Splitbuchung benötigt mindestens zwei Aufteilungszeilen.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        if sum(item[1] for item in parsed) != transaction["amount_cents"]:
+            flash("Die Aufteilung muss exakt dem Buchungsbetrag entsprechen.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        db.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (transaction_id,))
+        db.executemany(
+            """INSERT INTO transaction_splits(transaction_id,category_id,amount_cents,note)
+               VALUES (?,?,?,?)""",
+            [(transaction_id, *item) for item in parsed],
+        )
+        db.execute(
+            "UPDATE transactions SET category_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (transaction_id,),
+        )
+        log_action(db, "split", "transaction", transaction_id, json.dumps(parsed))
+        db.commit()
+        flash("Buchung vollständig aufgeteilt.", "success")
+        return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+
+    @app.post("/transactions/<int:transaction_id>/splits/clear")
+    @login_required
+    def transaction_splits_clear(transaction_id):
+        db = get_db()
+        if transaction_is_closed(db, transaction_id):
+            flash("Dieses Geschäftsjahr ist abgeschlossen und gegen Änderungen gesperrt.", "error")
+            return redirect(url_for("transaction_detail", transaction_id=transaction_id))
+        db.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (transaction_id,))
+        log_action(db, "unsplit", "transaction", transaction_id)
+        db.commit()
+        flash("Aufteilung entfernt; bitte wieder eine Kategorie zuordnen.", "success")
         return redirect(url_for("transaction_detail", transaction_id=transaction_id))
 
     @app.get("/attachments/<int:attachment_id>")
@@ -440,6 +543,9 @@ def create_app(test_config=None):
             booking_date = datetime.fromisoformat(request.form.get("booking_date", "")).date().isoformat()
         except (ValueError, TypeError):
             flash("Bitte Datum und gültigen Betrag angeben.", "error")
+            return redirect(url_for("accounts"))
+        if year_is_closed(db, booking_date[:4]):
+            flash("Dieses Geschäftsjahr ist abgeschlossen; dort sind keine neuen Barbuchungen möglich.", "error")
             return redirect(url_for("accounts"))
         if request.form.get("direction") == "expense":
             amount = -amount
@@ -556,6 +662,16 @@ def create_app(test_config=None):
         except ValueError as exc:
             temporary.unlink(missing_ok=True)
             flash(str(exc), "error")
+            return redirect(url_for("import_file"))
+        closed_years = sorted(
+            {tx.booking_date[:4] for tx in report.transactions if year_is_closed(db, tx.booking_date[:4])}
+        )
+        if closed_years:
+            temporary.unlink(missing_ok=True)
+            flash(
+                "Die Datei enthält Buchungen in abgeschlossenen Jahren: " + ", ".join(closed_years),
+                "error",
+            )
             return redirect(url_for("import_file"))
 
         selected_account_id = request.form.get("account_id")
@@ -732,6 +848,15 @@ def create_app(test_config=None):
                         (row["id"],),
                     ).fetchall()
                 ]
+                item["splits"] = [
+                    dict(split)
+                    for split in db.execute(
+                        """SELECT s.amount_cents,s.note,c.name category_name,c.tax_area
+                           FROM transaction_splits s JOIN categories c ON c.id=s.category_id
+                           WHERE s.transaction_id=? ORDER BY s.id""",
+                        (row["id"],),
+                    ).fetchall()
+                ]
                 snapshot_transactions.append(item)
             accounts_snapshot = [
                 dict(row)
@@ -843,6 +968,197 @@ def create_app(test_config=None):
             Path(app.config["DATA_DIR"]) / row["stored_path"],
             download_name=row["original_name"],
             as_attachment=False,
+        )
+
+    def year_status(db, year):
+        totals = db.execute(
+            """SELECT COUNT(*) total,
+                      COALESCE(SUM(receipt_status='missing'),0) missing,
+                      COALESCE(SUM(category_id IS NULL AND NOT EXISTS(
+                          SELECT 1 FROM transaction_splits s WHERE s.transaction_id=transactions.id
+                      )),0) uncategorized
+               FROM transactions WHERE substr(booking_date,1,4)=?""",
+            (year,),
+        ).fetchone()
+        closure = db.execute(
+            "SELECT * FROM year_closures WHERE organization_id=? AND year=?",
+            (ORGANIZATION_ID, year),
+        ).fetchone()
+        return {**dict(totals), "year": year, "closure": closure}
+
+    @app.get("/year-close")
+    @login_required
+    def year_close():
+        db = get_db()
+        years = [
+            row["year"]
+            for row in db.execute(
+                """SELECT year FROM (
+                       SELECT DISTINCT substr(booking_date,1,4) year FROM transactions
+                       UNION SELECT year FROM year_closures
+                   ) ORDER BY year DESC"""
+            ).fetchall()
+        ]
+        return render_template("year_close.html", years=[year_status(db, year) for year in years])
+
+    @app.post("/year-close/<year>")
+    @login_required
+    def year_close_update(year):
+        if len(year) != 4 or not year.isdigit():
+            abort(400)
+        db = get_db()
+        action = request.form.get("action", "close")
+        if action == "reopen":
+            db.execute(
+                "DELETE FROM year_closures WHERE organization_id=? AND year=?",
+                (ORGANIZATION_ID, year),
+            )
+            log_action(db, "reopened", "year", None, year)
+            db.commit()
+            flash(f"Geschäftsjahr {year} wieder geöffnet.", "success")
+            return redirect(url_for("year_close"))
+        status = year_status(db, year)
+        if not status["total"]:
+            flash("Ein leeres Geschäftsjahr kann nicht abgeschlossen werden.", "error")
+        elif status["missing"] or status["uncategorized"]:
+            flash(
+                f"Abschluss nicht möglich: {status['missing']} fehlende Belege und "
+                f"{status['uncategorized']} Buchungen ohne Kategorie.",
+                "error",
+            )
+        else:
+            payload = {
+                "transactions": [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT * FROM transactions WHERE substr(booking_date,1,4)=? ORDER BY id",
+                        (year,),
+                    ).fetchall()
+                ],
+                "splits": [
+                    dict(row)
+                    for row in db.execute(
+                        """SELECT s.* FROM transaction_splits s JOIN transactions t ON t.id=s.transaction_id
+                           WHERE substr(t.booking_date,1,4)=? ORDER BY s.id""",
+                        (year,),
+                    ).fetchall()
+                ],
+                "attachments": [
+                    dict(row)
+                    for row in db.execute(
+                        """SELECT a.id,a.transaction_id,a.file_hash,a.size_bytes FROM attachments a
+                           JOIN transactions t ON t.id=a.transaction_id
+                           WHERE substr(t.booking_date,1,4)=? ORDER BY a.id""",
+                        (year,),
+                    ).fetchall()
+                ],
+            }
+            summary_hash = hashlib.sha256(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+            ).hexdigest()
+            db.execute(
+                """INSERT INTO year_closures(organization_id,year,summary_hash)
+                   VALUES (?,?,?) ON CONFLICT(organization_id,year)
+                   DO UPDATE SET summary_hash=excluded.summary_hash,closed_at=CURRENT_TIMESTAMP""",
+                (ORGANIZATION_ID, year, summary_hash),
+            )
+            log_action(db, "closed", "year", None, json.dumps({"year": year, "hash": summary_hash}))
+            db.commit()
+            flash(f"Geschäftsjahr {year} abgeschlossen und gesperrt.", "success")
+        return redirect(url_for("year_close"))
+
+    @app.get("/years/<year>/archive.zip")
+    @login_required
+    def year_archive(year):
+        if len(year) != 4 or not year.isdigit():
+            abort(400)
+        db = get_db()
+        closure = db.execute(
+            "SELECT * FROM year_closures WHERE organization_id=? AND year=?",
+            (ORGANIZATION_ID, year),
+        ).fetchone()
+        if closure is None:
+            flash("Das Jahresarchiv steht nach dem Jahresabschluss bereit.", "error")
+            return redirect(url_for("year_close"))
+        transactions = db.execute(
+            """SELECT t.*,a.name account_name,c.name category_name,c.tax_area
+               FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id
+               LEFT JOIN categories c ON c.id=t.category_id
+               WHERE substr(t.booking_date,1,4)=? ORDER BY t.booking_date,t.id""",
+            (year,),
+        ).fetchall()
+        organization = db.execute(
+            "SELECT * FROM organizations WHERE id=?", (ORGANIZATION_ID,)
+        ).fetchone()
+        output = io.BytesIO()
+        manifest = {}
+
+        def add_file(archive, name, content):
+            data = content.encode() if isinstance(content, str) else content
+            archive.writestr(name, data)
+            manifest[name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            csv_output = io.StringIO()
+            writer = csv.writer(csv_output, delimiter=";")
+            writer.writerow(
+                ["Buchung", "Konto", "Datum", "Betrag", "Währung", "Gegenpartei", "Zweck", "Kategorie", "Steuerbereich", "Split-Notiz", "Belegstatus"]
+            )
+            for transaction in transactions:
+                splits = db.execute(
+                    """SELECT s.*,c.name category_name,c.tax_area FROM transaction_splits s
+                       JOIN categories c ON c.id=s.category_id WHERE s.transaction_id=? ORDER BY s.id""",
+                    (transaction["id"],),
+                ).fetchall()
+                allocations = splits or [transaction]
+                for allocation in allocations:
+                    writer.writerow(
+                        [
+                            transaction["id"], transaction["account_name"], transaction["booking_date"],
+                            f"{allocation['amount_cents']/100:.2f}".replace(".", ","), transaction["currency"],
+                            transaction["counterparty"], transaction["purpose"], allocation["category_name"],
+                            allocation["tax_area"], allocation["note"] if splits else "", transaction["receipt_status"],
+                        ]
+                    )
+            add_file(archive, "buchungen.csv", "\ufeff" + csv_output.getvalue())
+            attachments = db.execute(
+                """SELECT a.*,t.id transaction_id FROM attachments a JOIN transactions t ON t.id=a.transaction_id
+                   WHERE substr(t.booking_date,1,4)=? ORDER BY a.id""",
+                (year,),
+            ).fetchall()
+            for attachment in attachments:
+                path = Path(app.config["DATA_DIR"]) / attachment["stored_path"]
+                if path.exists():
+                    add_file(
+                        archive,
+                        f"belege/{attachment['transaction_id']}/{attachment['id']}-{secure_filename(attachment['original_name'])}",
+                        path.read_bytes(),
+                    )
+            batches = db.execute(
+                """SELECT DISTINCT b.* FROM import_batches b JOIN transactions t ON t.import_batch_id=b.id
+                   WHERE substr(t.booking_date,1,4)=? AND b.stored_path!='' ORDER BY b.id""",
+                (year,),
+            ).fetchall()
+            for batch in batches:
+                path = Path(app.config["DATA_DIR"]) / batch["stored_path"]
+                if path.exists():
+                    add_file(archive, f"importe/{batch['id']}-{secure_filename(batch['filename'])}", path.read_bytes())
+            report = {
+                "organization": organization["name"],
+                "year": year,
+                "closed_at": closure["closed_at"],
+                "summary_hash": closure["summary_hash"],
+                "transactions": len(transactions),
+                "attachments": len(attachments),
+            }
+            add_file(archive, "pruefbericht.json", json.dumps(report, ensure_ascii=False, indent=2))
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode())
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"vereinskasse-{year}.zip",
         )
 
     @app.get("/export.csv")

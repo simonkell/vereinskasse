@@ -31,7 +31,7 @@
   <section class="card">
     <div class="card-head"><div><h2>Zuletzt importiert</h2><p class="muted">Die neuesten Kontobewegungen</p></div><a href="{{ url_for('transactions') }}">Alle anzeigen</a></div>
     {% if recent %}<div class="mini-list">{% for tx in recent %}
-      <a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span class="status-dot {{ tx.receipt_status }}"></span><div><strong>{{ tx.counterparty or 'Unbekannte Gegenpartei' }}</strong><small>{{ tx.booking_date|date_de }} · {{ tx.account_name or 'Ohne Konto' }} · {{ tx.category_name or 'Ohne Kategorie' }}</small></div><b class="{{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</b></a>
+      <a href="{{ url_for('transaction_detail', transaction_id=tx.id) }}"><span class="status-dot {{ tx.receipt_status }}"></span><div><strong>{{ tx.counterparty or 'Unbekannte Gegenpartei' }}</strong><small>{{ tx.booking_date|date_de }} · {{ tx.account_name or 'Ohne Konto' }} · {{ 'Aufgeteilt' if tx.split_count else (tx.category_name or 'Ohne Kategorie') }}</small></div><b class="{{ 'positive' if tx.amount_cents > 0 else 'negative' }}">{{ tx.amount_cents|money(tx.currency) }}</b></a>
     {% endfor %}</div>{% else %}<div class="empty">Importiere deinen ersten CAMT-Kontoauszug.</div>{% endif %}
   </section>
 </div>

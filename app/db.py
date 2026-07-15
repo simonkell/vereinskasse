@@ -104,6 +104,24 @@ CREATE TABLE IF NOT EXISTS review_shares (
     expires_at TEXT,
     revoked_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS transaction_splits (
+    id INTEGER PRIMARY KEY,
+    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    amount_cents INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS year_closures (
+    id INTEGER PRIMARY KEY,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id),
+    year TEXT NOT NULL,
+    summary_hash TEXT NOT NULL,
+    closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(organization_id, year)
+);
 """
 
 
@@ -144,6 +162,7 @@ def init_db():
     _ensure_column(db, "transactions", "account_id", "INTEGER REFERENCES accounts(id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction ON transaction_splits(transaction_id)")
     _migrate_existing_accounts(db)
     db.executemany(
         "INSERT OR IGNORE INTO categories(name, tax_area) VALUES (?, ?)",

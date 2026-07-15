@@ -16,6 +16,10 @@ digitalen Belegen vervollständigt.
 - mehrere PDF-, PNG- oder JPEG-Belege je Buchung
 - Status `Beleg fehlt`, `Vollständig` oder `Kein Beleg erforderlich`
 - Jahresübersicht und CSV-Export
+- Splitbuchungen mit vollständiger Betragskontrolle
+- Jahresabschluss mit Vollständigkeitsprüfung und Änderungssperre
+- eigenständig archivierbares ZIP je abgeschlossenem Jahr mit Buchungen, Belegen,
+  Originalimporten, Prüfbericht und SHA-256-Manifest
 - Prüfprotokoll für Importe, Beleguploads und fachliche Änderungen
 - zeitlich begrenzte, widerrufbare Nur-Lese-Freigaben für Kassenprüfer
 - unveränderliche Prüfungsstände, die spätere Änderungen nicht rückwirkend verändern
@@ -150,13 +154,17 @@ IBANs werden als Bankkonten angelegt und vorhandene Buchungen diesen Konten zuge
 Prüfungsfreigaben speichern einen Snapshot der Buchungsdaten; der geheime Link wird nur
 einmal angezeigt und in der Datenbank ausschließlich als SHA-256-Prüfwert gespeichert.
 
+Ein Geschäftsjahr lässt sich erst abschließen, wenn alle Buchungen kategorisiert und
+alle Belegstatus bearbeitet wurden. Danach sind Importe, Barbuchungen, fachliche
+Änderungen, Splitbuchungen und neue Belege für dieses Jahr gesperrt. Ein bewusstes
+Wiederöffnen bleibt möglich und wird im Prüfprotokoll festgehalten.
+
 ## Noch nicht enthalten
 
 - direkter FinTS-/HBCI-Abruf
 - mehrere Benutzer und Rollen
-- Splitbuchungen
 - revisionssichere Korrektur-/Stornobuchungen
-- ZIP-Jahresarchiv und PDF-Kassenbericht
+- PDF-Kassenbericht
 - automatische Belegerkennung/OCR
 - MT940- und frei konfigurierbare CSV-Importe
 

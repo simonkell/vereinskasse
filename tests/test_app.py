@@ -3,6 +3,7 @@ import re
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from app import create_app
@@ -134,13 +135,85 @@ class AppTest(unittest.TestCase):
         )
         self.assertEqual(anonymous.get(public_path).status_code, 404)
 
+    def test_split_booking_must_match_full_amount(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "camt.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        transaction_id = connection.execute(
+            "SELECT id FROM transactions WHERE amount_cents=4250"
+        ).fetchone()[0]
+        categories = [row[0] for row in connection.execute("SELECT id FROM categories LIMIT 2")]
+        connection.close()
+        response = self.client.post(
+            f"/transactions/{transaction_id}/splits",
+            data={
+                "csrf_token": self.csrf(),
+                "split_category_id": [str(categories[0]), str(categories[1])],
+                "split_amount": ["20,00", "22,50"],
+                "split_note": ["Teil A", "Teil B"],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        split_total = connection.execute(
+            "SELECT SUM(amount_cents) FROM transaction_splits WHERE transaction_id=?",
+            (transaction_id,),
+        ).fetchone()[0]
+        category_id = connection.execute(
+            "SELECT category_id FROM transactions WHERE id=?", (transaction_id,)
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(split_total, 4250)
+        self.assertIsNone(category_id)
+
+    def test_year_close_locks_changes_and_builds_archive(self):
+        self.client.post(
+            "/import",
+            data={"csrf_token": self.csrf(), "statement": (io.BytesIO(CAMT.encode()), "camt.xml")},
+            content_type="multipart/form-data",
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        category_id = connection.execute("SELECT id FROM categories LIMIT 1").fetchone()[0]
+        connection.execute(
+            "UPDATE transactions SET category_id=?,receipt_status='not_required'", (category_id,)
+        )
+        connection.commit()
+        transaction_id = connection.execute("SELECT id FROM transactions LIMIT 1").fetchone()[0]
+        connection.close()
+        response = self.client.post(
+            "/year-close/2026", data={"csrf_token": self.csrf()}
+        )
+        self.assertEqual(response.status_code, 302)
+        archive_response = self.client.get("/years/2026/archive.zip")
+        self.assertEqual(archive_response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(archive_response.data)) as archive:
+            names = set(archive.namelist())
+        self.assertTrue({"buchungen.csv", "pruefbericht.json", "manifest.json"}.issubset(names))
+
+        self.client.post(
+            f"/transactions/{transaction_id}/update",
+            data={
+                "csrf_token": self.csrf(),
+                "category_id": str(category_id),
+                "receipt_status": "not_required",
+                "note": "darf nicht gespeichert werden",
+            },
+        )
+        connection = sqlite3.connect(self.app.config["DATABASE"])
+        note = connection.execute("SELECT note FROM transactions WHERE id=?", (transaction_id,)).fetchone()[0]
+        connection.close()
+        self.assertIsNone(note)
+
     def test_protected_routes_require_login(self):
         anonymous = self.app.test_client()
         self.assertEqual(anonymous.get("/").status_code, 302)
         self.assertIn("/login", anonymous.get("/").headers["Location"])
 
     def test_authenticated_product_pages_render(self):
-        for path in ("/", "/transactions", "/accounts", "/import", "/categories", "/reviews", "/audit"):
+        for path in ("/", "/transactions", "/accounts", "/import", "/categories", "/reviews", "/year-close", "/audit"):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
 
