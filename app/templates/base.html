@@ -18,22 +18,24 @@
       <span class="nav-toggle-icon" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="visually-hidden">Menü öffnen</span>
     </button>
+    <button class="nav-backdrop" type="button" aria-label="Menü schließen" tabindex="-1"></button>
     <nav class="primary-navigation" id="primary-navigation" aria-label="Hauptnavigation">
+      <div class="mobile-nav-head"><strong>Menü</strong><button class="nav-close" type="button" aria-label="Menü schließen"><span aria-hidden="true">×</span></button></div>
       <a{% if request.endpoint == 'dashboard' %} class="active" aria-current="page"{% endif %} href="{{ url_for('dashboard') }}">Übersicht</a>
       <a{% if request.endpoint == 'transactions' or request.endpoint == 'transaction_detail' %} class="active" aria-current="page"{% endif %} href="{{ url_for('transactions') }}">Buchungen</a>
       <a{% if request.endpoint == 'reviews' %} class="active" aria-current="page"{% endif %} href="{{ url_for('reviews') }}">Kassenprüfung</a>
       <a{% if request.endpoint == 'year_close' %} class="active" aria-current="page"{% endif %} href="{{ url_for('year_close') }}">Jahresabschluss</a>
       <a{% if request.endpoint == 'audit' %} class="active" aria-current="page"{% endif %} href="{{ url_for('audit') }}">Prüfprotokoll</a>
       {% set settings_endpoints = ['accounts', 'import_file', 'import_csv_preview', 'categories', 'classification_rules'] %}
-      <details class="nav-submenu">
-        <summary{% if request.endpoint in settings_endpoints %} class="active"{% endif %}>Einstellungen <span aria-hidden="true">⌄</span></summary>
-        <div class="submenu-panel">
+      <div class="settings-menu{% if request.endpoint in settings_endpoints %} active{% endif %}">
+        <button class="settings-toggle" type="button" aria-expanded="false" aria-controls="settings-navigation">Einstellungen <span class="settings-chevron" aria-hidden="true">⌄</span></button>
+        <div class="submenu-panel" id="settings-navigation">
           <a{% if request.endpoint == 'accounts' %} class="active" aria-current="page"{% endif %} href="{{ url_for('accounts') }}"><strong>Konten &amp; Kasse</strong><small>Bankkonten und Barkasse verwalten</small></a>
           <a{% if request.endpoint in ['import_file', 'import_csv_preview'] %} class="active" aria-current="page"{% endif %} href="{{ url_for('import_file') }}"><strong>Import</strong><small>Neue Bankumsätze einlesen</small></a>
           <a{% if request.endpoint == 'categories' %} class="active" aria-current="page"{% endif %} href="{{ url_for('categories') }}"><strong>Kategorien</strong><small>Kontenplan und Zuordnung</small></a>
           <a{% if request.endpoint == 'classification_rules' %} class="active" aria-current="page"{% endif %} href="{{ url_for('classification_rules') }}"><strong>Regeln</strong><small>Wiederkehrende Buchungen erkennen</small></a>
         </div>
-      </details>
+      </div>
       <form class="nav-logout" action="{{ url_for('logout') }}" method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="button ghost small" type="submit">Abmelden</button>

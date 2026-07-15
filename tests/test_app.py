@@ -692,8 +692,10 @@ class AppTest(unittest.TestCase):
         self.assertIn('class="nav-toggle"', html)
         self.assertIn('aria-controls="primary-navigation"', html)
         self.assertIn('class="primary-navigation"', html)
-        self.assertIn('class="nav-submenu"', html)
-        self.assertIn('class="active">Einstellungen', html)
+        self.assertIn('class="settings-menu active"', html)
+        self.assertIn('class="settings-toggle"', html)
+        self.assertIn('class="nav-backdrop"', html)
+        self.assertIn('class="nav-close"', html)
         for label in ("Konten &amp; Kasse", "Import", "Kategorien", "Regeln"):
             self.assertIn(label, html)
 
